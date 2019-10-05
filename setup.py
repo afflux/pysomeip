@@ -25,6 +25,7 @@ setup(
             'someip-monitor-offers = someip.sd:main',
         ],
     },
+    test_suite='someip.tests',
     **extra
 )
 
