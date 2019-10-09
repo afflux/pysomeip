@@ -329,7 +329,7 @@ class SOMEIPSDEntry:
     def eventgroup_counter(self) -> int:
         if self.sd_type not in (SOMEIPSDEntryType.Subscribe, SOMEIPSDEntryType.SubscribeAck):
             raise TypeError(f'SD entry is type {self.sd_type}, does not have eventgroup_counter')
-        return (self.minver_or_counter >> 16) & 0xff
+        return (self.minver_or_counter >> 16) & 0x0f
 
     @property
     def eventgroup_id(self) -> int:
@@ -347,8 +347,9 @@ class SOMEIPSDEntry:
         ttl = (ttl_hi << 16) | ttl_lo
 
         if sd_type in (SOMEIPSDEntryType.Subscribe, SOMEIPSDEntryType.SubscribeAck):
-            if val & 0xffffff00:
-                raise ParseError('expected eventgroup counter to be 8-bit with 24 upper bits zeros')
+            if val & 0xfff00000:
+                raise ParseError('expected counter and eventgroup_id to be 4 + 16-bit'
+                                 ' with 12 upper bits zeros')
 
         parsed = cls(sd_type=sd_type, option_index_1=oi1, option_index_2=oi2,
                      num_options_1=no1, num_options_2=no2, service_id=sid, instance_id=iid,

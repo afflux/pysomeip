@@ -168,7 +168,7 @@ class TestHeader(unittest.TestCase):
         self._check(payload, entry, hdr.SOMEIPSDEntry.parse, extra=payload)
 
     def test_sdentry_eventgroup(self):
-        payload = b'\x06\xAA\xBB\xCD\x88\x99\x66\x77\xEE\x20\x21\x22\x00\x00\x00\x10'
+        payload = b'\x06\xAA\xBB\xCD\x88\x99\x66\x77\xEE\x20\x21\x22\x00\x09\x11\x11'
         result = hdr.SOMEIPSDEntry.parse(payload)
         entry = hdr.SOMEIPSDEntry(sd_type=hdr.SOMEIPSDEntryType.Subscribe,
                                   option_index_1=0xaa,
@@ -179,7 +179,7 @@ class TestHeader(unittest.TestCase):
                                   instance_id=0x6677,
                                   major_version=0xee,
                                   ttl=0x202122,
-                                  minver_or_counter=0x10)
+                                  minver_or_counter=0x091111)
         self.assertEqual(result[1], b'')
         self.assertEqual(result[0], entry)
         self.assertEqual(entry.build(), payload)
@@ -194,8 +194,9 @@ class TestHeader(unittest.TestCase):
                                   instance_id=0x6677,
                                   major_version=0xee,
                                   ttl=0x202122,
-                                  minver_or_counter=0x10)
-        self.assertEqual(entry.eventgroup_counter, 0x10)
+                                  minver_or_counter=0x091111)
+        self.assertEqual(entry.eventgroup_counter, 0x9)
+        self.assertEqual(entry.eventgroup_id, 0x1111)
         with self.assertRaises(TypeError):
             entry.service_minor_version
 
