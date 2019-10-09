@@ -1,5 +1,6 @@
 
 import asyncio
+import copy
 import dataclasses
 import enum
 import ipaddress
@@ -9,6 +10,10 @@ import typing
 
 
 T = typing.TypeVar('T')
+
+
+SD_SERVICE = 0xffff
+SD_METHOD = 0x8100
 
 
 class ParseError(RuntimeError):
@@ -116,11 +121,30 @@ class SOMEIPHeader:
     method_id: int
     client_id: int
     session_id: int
-    protocol_version: int
     interface_version: int
     message_type: SOMEIPMessageType
-    return_code: SOMEIPReturnCode
+    protocol_version: int = dataclasses.field(default=1)
+    return_code: SOMEIPReturnCode = dataclasses.field(default=SOMEIPReturnCode.E_OK)
     payload: bytes = dataclasses.field(default=b'')
+
+    @property
+    def description(self):
+        return f'''service: 0x{self.service_id:04x}
+method: 0x{self.method_id:04x}
+client: 0x{self.client_id:04x}
+session: 0x{self.session_id:04x}
+protocol: {self.protocol_version}
+interface: 0x{self.interface_version:02x}
+message: {self.message_type.name}
+return code: {self.return_code.name}
+payload: {len(self.payload)} bytes'''
+
+    def __str__(self):
+        return f'service=0x{self.service_id:04x}, method=0x{self.method_id:04x},' \
+               f' client=0x{self.client_id:04x}, session=0x{self.session_id:04x},' \
+               f' protocol={self.protocol_version}, interface=0x{self.interface_version:02x},' \
+               f' message={self.message_type.name}, returncode={self.return_code.name},' \
+               f' payload: {len(self.payload)} bytes'
 
     @classmethod
     def parse(cls, buf: bytes) -> typing.Tuple['SOMEIPHeader', bytes]:
@@ -166,8 +190,8 @@ class SOMEIPHeader:
     def build(self) -> bytes:
         size = len(self.payload) + 8
         hdr = self.__format.pack(self.service_id, self.method_id, size, self.client_id,
-                                self.session_id, self.protocol_version, self.interface_version,
-                                self.message_type.value, self.return_code.value)
+                                 self.session_id, self.protocol_version, self.interface_version,
+                                 self.message_type.value, self.return_code.value)
         return hdr + self.payload
 
 
@@ -190,19 +214,110 @@ class SOMEIPSDEntryType(DefaultEnum):
     SubscribeAck = 7
 
 
+def _find(haystack, needle):
+    """Return the index at which the sequence needle appears in the
+    sequence haystack, or -1 if it is not found, using the Boyer-
+    Moore-Horspool algorithm. The elements of needle and haystack must
+    be hashable.
+
+    >>> find([1, 1, 2], [1, 2])
+    1
+
+    from https://codereview.stackexchange.com/a/19629
+    """
+    h = len(haystack)
+    n = len(needle)
+    skip = {needle[i]: n - i - 1 for i in range(n - 1)}
+    i = n - 1
+    while i < h:
+        for j in range(n):
+            if haystack[i - j] != needle[-j - 1]:
+                i += skip.get(haystack[i], n)
+                break
+        else:
+            return i - n + 1
+    return None
+
+
 @dataclasses.dataclass
 class SOMEIPSDEntry:
     __format: typing.ClassVar[struct.Struct] = struct.Struct('!BBBBHHBBHI')
     sd_type: SOMEIPSDEntryType
-    option_index_1: int
-    option_index_2: int
-    num_options_1: int
-    num_options_2: int
     service_id: int
     instance_id: int
     major_version: int
     ttl: int
     minver_or_counter: int
+
+    options_1: typing.List['SOMEIPSDOption'] = dataclasses.field(default_factory=list)
+    options_2: typing.List['SOMEIPSDOption'] = dataclasses.field(default_factory=list)
+    option_index_1: typing.Optional[int] = dataclasses.field(default=None)
+    option_index_2: typing.Optional[int] = dataclasses.field(default=None)
+    num_options_1: typing.Optional[int] = dataclasses.field(default=None)
+    num_options_2: typing.Optional[int] = dataclasses.field(default=None)
+
+    def __str__(self) -> str:
+        if self.sd_type in (SOMEIPSDEntryType.FindService, SOMEIPSDEntryType.OfferService):
+            version = f'{self.major_version}.{self.service_minor_version}'
+        elif self.sd_type in (SOMEIPSDEntryType.Subscribe, SOMEIPSDEntryType.SubscribeAck):
+            version = (f'{self.major_version}, eventgroup_counter={self.eventgroup_counter},'
+                       f' eventgroup_id={self.eventgroup_id}')
+        else:
+            raise TypeError('unsupported sd_type received')
+
+        if self.options_resolved:
+            s_options_1 = ', '.join(str(o) for o in self.options_1)
+            s_options_2 = ', '.join(str(o) for o in self.options_2)
+        else:
+            s_options_1 = range(self.option_index_1, self.option_index_1+self.num_options_1)
+            s_options_2 = range(self.option_index_2, self.option_index_2+self.num_options_2)
+
+        return f'type={self.sd_type.name}, service=0x{self.service_id:04x},' \
+               f' instance=0x{self.instance_id:04x}, version={version}, ttl={self.ttl}, ' \
+               f' options_1=[{s_options_1}], options_2=[{s_options_2}]'
+
+    @property
+    def is_stop_offer(self):
+        # Example for a Serialization Protocol (SOME/IP) AUTOSAR Release 4.2.1 TR_SOMEIP_00364
+        return self.sd_type == SOMEIPSDEntryType.OfferService and self.ttl == 0
+
+    @property
+    def options_resolved(self):
+        return self.option_index_1 is None or self.option_index_2 is None \
+                or self.num_options_1 is None or self.num_options_2 is None
+
+    def resolve_options(self, options: typing.Sequence['SOMEIPSDOption']):
+        if self.options_resolved:
+            raise ValueError('options already resolved')
+
+        oi1 = self.option_index_1
+        oi2 = self.option_index_2
+        no1 = self.num_options_1
+        no2 = self.num_options_2
+
+        self.option_index_1 = self.option_index_2 = self.num_options_1 = self.num_options_2 = None
+
+        self.options_1 = list(copy.deepcopy(options[oi1:oi1 + no1]))
+        self.options_2 = list(copy.deepcopy(options[oi2:oi2 + no2]))
+
+    @staticmethod
+    def _assign_option(entry_options, hdr_options):
+        if not entry_options:
+            return (0, 0)
+
+        no = len(entry_options)
+        oi = _find(hdr_options, entry_options)
+        if oi is None:
+            oi = len(hdr_options)
+            hdr_options.extend(entry_options)
+        return oi, no
+
+    def assign_option_index(self, options: typing.List['SOMEIPSDOption']):
+        if not self.options_resolved:
+            return
+
+        self.option_index_1, self.num_options_1 = self._assign_option(self.options_1, options)
+        self.option_index_2, self.num_options_2 = self._assign_option(self.options_2, options)
 
     @property
     def service_minor_version(self) -> int:
@@ -214,7 +329,13 @@ class SOMEIPSDEntry:
     def eventgroup_counter(self) -> int:
         if self.sd_type not in (SOMEIPSDEntryType.Subscribe, SOMEIPSDEntryType.SubscribeAck):
             raise TypeError(f'SD entry is type {self.sd_type}, does not have eventgroup_counter')
-        return self.minver_or_counter
+        return (self.minver_or_counter >> 16) & 0xff
+
+    @property
+    def eventgroup_id(self) -> int:
+        if self.sd_type not in (SOMEIPSDEntryType.Subscribe, SOMEIPSDEntryType.SubscribeAck):
+            raise TypeError(f'SD entry is type {self.sd_type}, does not have eventgroup_id')
+        return self.minver_or_counter & 0xffff
 
     @classmethod
     def parse(cls, buf: bytes) -> typing.Tuple['SOMEIPSDEntry', bytes]:
@@ -236,11 +357,13 @@ class SOMEIPSDEntry:
         return parsed, buf_rest
 
     def build(self) -> bytes:
+        if self.options_resolved:
+            raise ValueError('option indexes must be assigned before building')
         return self.__format.pack(self.sd_type.value, self.option_index_1, self.option_index_2,
-                                 (self.num_options_1 << 4) | self.num_options_2, self.service_id,
-                                 self.instance_id, self.major_version,
-                                 self.ttl >> 16, self.ttl & 0xffff,
-                                 self.minver_or_counter)
+                                  (self.num_options_1 << 4) | self.num_options_2, self.service_id,
+                                  self.instance_id, self.major_version,
+                                  self.ttl >> 16, self.ttl & 0xffff,
+                                  self.minver_or_counter)
 
 
 class SOMEIPSDOption:
@@ -270,7 +393,7 @@ class SOMEIPSDOption:
     def build(self) -> bytes: ...
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class SOMEIPSDUnknownOption(SOMEIPSDOption):
     type_: int
     payload: bytes
@@ -287,7 +410,7 @@ class SOMEIPSDAbstractOption(SOMEIPSDOption):
 
 
 @SOMEIPSDOption.register
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class SOMEIPSDLoadBalancingOption(SOMEIPSDAbstractOption):
     type_: typing.ClassVar[int] = 2
     priority: int
@@ -308,7 +431,7 @@ class SOMEIPSDLoadBalancingOption(SOMEIPSDAbstractOption):
 
 
 @SOMEIPSDOption.register
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class SOMEIPSDConfigOption(SOMEIPSDAbstractOption):
     type_: typing.ClassVar[int] = 1
     configs: typing.Sequence[typing.Tuple[str, typing.Optional[str]]]
@@ -363,7 +486,7 @@ class L4Protocols(DefaultEnum):
 
 
 @SOMEIPSDOption.register
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class SOMEIPSDIPv4EndpointOption(SOMEIPSDAbstractOption):
     __format: typing.ClassVar[struct.Struct] = struct.Struct('!B4sBBH')
     type_: typing.ClassVar[int] = 4
@@ -388,6 +511,9 @@ class SOMEIPSDIPv4EndpointOption(SOMEIPSDAbstractOption):
 
         return cls(address=addr, l4proto=l4proto, port=port)
 
+    def __str__(self) -> str:
+        return f'{self.address}:{self.port} ({self.l4proto.name})'
+
     def build(self) -> bytes:
         payload = self.__format.pack(0, self.address.packed, 0, self.l4proto.value, self.port)
         return self.build_option(self.type_, payload)
@@ -395,11 +521,23 @@ class SOMEIPSDIPv4EndpointOption(SOMEIPSDAbstractOption):
 
 @dataclasses.dataclass
 class SOMEIPSDHeader:
-    flag_reboot: bool
-    flag_unicast: bool
-    flags_unknown: int
     entries: typing.Sequence[SOMEIPSDEntry]
-    options: typing.Sequence[SOMEIPSDOption]
+    options: typing.Sequence[SOMEIPSDOption] = dataclasses.field(default_factory=list)
+    flag_reboot: bool = dataclasses.field(default=False)
+    flag_unicast: bool = dataclasses.field(default=False)
+    flags_unknown: int = dataclasses.field(default=0)
+
+    def resolve_options(self):
+        for e in self.entries:
+            e.resolve_options(self.options)
+
+    def assign_option_indexes(self):
+        for e in self.entries:
+            e.assign_option_index(self.options)
+
+    def __str__(self):
+        entries = '\n'.join(str(e) for e in self.entries)
+        return f'reboot={self.flag_reboot}, unicast={self.flag_unicast}, entries:\n{entries}'
 
     @classmethod
     def parse(cls, buf: bytes) -> typing.Tuple['SOMEIPSDHeader', bytes]:
