@@ -520,6 +520,40 @@ class SOMEIPSDIPv4EndpointOption(SOMEIPSDAbstractOption):
         return self.build_option(self.type_, payload)
 
 
+@SOMEIPSDOption.register
+@dataclasses.dataclass(frozen=True)
+class SOMEIPSDIPv6EndpointOption(SOMEIPSDAbstractOption):
+    __format: typing.ClassVar[struct.Struct] = struct.Struct('!B16sBBH')
+    type_: typing.ClassVar[int] = 0x24
+    address: ipaddress.IPv6Address
+    l4proto: L4Protocols
+    port: int
+
+    @classmethod
+    def parse_option(cls, buf: bytes) -> 'SOMEIPSDIPv4EndpointOption':
+        if len(buf) != 0x15:
+            raise ParseError(f'SD IPv4 option with wrong payload length {len(buf)} != 9')
+
+        r1, addr_b, r2, l4proto_b, port = cls.__format.unpack(buf)
+
+        if r1 != 0:
+            raise ParseError(f'SD IPv6 option with reserved 1 = 0x{r1:02x} != 0')
+        if r2 != 0:
+            raise ParseError(f'SD IPv6 option with reserved 2 = 0x{r2:02x} != 0')
+
+        addr = ipaddress.IPv6Address(addr_b)
+        l4proto = L4Protocols(l4proto_b)
+
+        return cls(address=addr, l4proto=l4proto, port=port)
+
+    def __str__(self) -> str:
+        return f'[{self.address}]:{self.port} ({self.l4proto.name})'
+
+    def build(self) -> bytes:
+        payload = self.__format.pack(0, self.address.packed, 0, self.l4proto.value, self.port)
+        return self.build_option(self.type_, payload)
+
+
 @dataclasses.dataclass
 class SOMEIPSDHeader:
     entries: typing.Sequence[SOMEIPSDEntry]
