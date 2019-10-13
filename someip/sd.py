@@ -294,7 +294,7 @@ class _BaseMulticastSDProtocol(_BaseSDProtocol):
     REPETITIONS_BASE_DELAY = 0.03  # in seconds
     CYCLIC_ANNOUNCE_DELAY = 1  # in seconds
 
-    def __init__(self, logger: str, multicast_addr: typing.Tuple[str, int]):
+    def __init__(self, multicast_addr: typing.Tuple[str, int], logger: str = 'someip.sd.abstract'):
         super().__init__(logger=logger)
         self.multicast_addr = multicast_addr
 
@@ -350,7 +350,7 @@ class _BaseMulticastSDProtocol(_BaseSDProtocol):
         # anymore. so we store the multicast address as a default destination address on the
         # isntance and wrap the send calls with _write
         if remote:
-            self.transport.sendto(buf, remote)
+            self.transport.sendto(buf, (str(remote[0]), remote[1]))
         else:
             self.transport.sendto(buf, self.multicast_addr)
 
@@ -373,8 +373,8 @@ class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
 
     '''
 
-    def __init__(self, multicast_addr: typing.Tuple[str, int]):
-        super().__init__(logger='someip.sd.discover', multicast_addr=multicast_addr)
+    def __init__(self, multicast_addr: typing.Tuple[str, int], logger: str = 'someip.sd.discover'):
+        super().__init__(logger=logger, multicast_addr=multicast_addr)
         self.watched_services: typing.Set[someip.config.Service] = set()
         self.found_services: typing.Dict[someip.config.Service, typing.Optional[asyncio.Task]] = {}
 
@@ -497,8 +497,8 @@ class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
 class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
     # TODO doc
 
-    def __init__(self, multicast_addr: typing.Tuple[str, int]):
-        super().__init__(logger='someip.sd.announce', multicast_addr=multicast_addr)
+    def __init__(self, multicast_addr: typing.Tuple[str, int], logger: str = 'someip.sd.announce'):
+        super().__init__(logger=logger, multicast_addr=multicast_addr)
 
         self.task = None
         self.alive = False
