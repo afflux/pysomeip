@@ -290,6 +290,8 @@ class SubscriptionProtocol(_BaseSDProtocol):
 class _BaseMulticastSDProtocol(_BaseSDProtocol):
     INITIAL_DELAY_MIN = 0.05  # in seconds
     INITIAL_DELAY_MAX = 0.5   # in seconds
+    REQUEST_RESPONSE_DELAY_MIN = 0.05  # in seconds
+    REQUEST_RESPONSE_DELAY_MAX = 0.5   # in seconds
     REPETITIONS_MAX = 4
     REPETITIONS_BASE_DELAY = 0.03  # in seconds
     CYCLIC_ANNOUNCE_DELAY = 1  # in seconds
@@ -520,12 +522,27 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
                 continue
             elif entry.sd_type == someip.header.SOMEIPSDEntryType.FindService:
                 self.log.info('received from %s:%d: %s', addr[0], addr[1], entry)
-                # TODO handle FindService, send OfferService if known
+                asyncio.create_task(self._handle_findservice(entry, addr))
             elif entry.sd_type == someip.header.SOMEIPSDEntryType.Subscribe:
                 self.log.info('received from %s:%d: %s', addr[0], addr[1], entry)
                 # TODO handle Subscribe Eventgroup
             else:
                 self.log.info('received unexpected from %s:%d: %s', addr[0], addr[1], entry)
+
+    async def _handle_findservice(self, entry: someip.header.SOMEIPSDEntry,
+                                  addr: typing.Tuple[str, int]) -> None:
+        try:
+            parsed_addr = (ipaddress.ip_address(addr[0]), addr[1])
+            local_services = [s for s in self.announcing_services if s.matches_find(entry)]
+            if not local_services:
+                return
+            # FIXME this should not sleep when received over unicast. probably needs two sockets...
+            await asyncio.sleep(random.uniform(self.REQUEST_RESPONSE_DELAY_MIN,
+                                               self.REQUEST_RESPONSE_DELAY_MAX))
+            self._send_offers(local_services, remote=parsed_addr)
+        except Exception:
+            self.log.exception('exception in _handle_findservice')
+            raise
 
     def start(self, loop=None):
         if self.task is not None or self.alive:
