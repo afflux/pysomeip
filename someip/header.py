@@ -421,8 +421,6 @@ class SOMEIPSDLoadBalancingOption(SOMEIPSDAbstractOption):
     def parse_option(cls, buf: bytes) -> 'SOMEIPSDLoadBalancingOption':
         if len(buf) != 5:
             raise ParseError(f'SD load balancing option with wrong payload length {len(buf)} != 5')
-        if buf[0] != 0:
-            raise ParseError(f'SD load balancing option with reserved = 0x{buf[0]:02x} != 0')
 
         prio, weight = struct.unpack('!HH', buf[1:])
         return cls(priority=prio, weight=weight)
@@ -441,8 +439,6 @@ class SOMEIPSDConfigOption(SOMEIPSDAbstractOption):
     def parse_option(cls, buf: bytes) -> 'SOMEIPSDConfigOption':
         if len(buf) < 2:
             raise ParseError(f'SD config option with wrong payload length {len(buf)} < 2')
-        if buf[0] != 0:
-            raise ParseError(f'SD config option with reserved = 0x{buf[0]:02x} != 0')
 
         b = buf[1:]
         nextlen, b = b[0], b[1:]
@@ -502,11 +498,6 @@ class SOMEIPSDIPv4EndpointOption(SOMEIPSDAbstractOption):
 
         r1, addr_b, r2, l4proto_b, port = cls.__format.unpack(buf)
 
-        if r1 != 0:
-            raise ParseError(f'SD IPv4 option with reserved 1 = 0x{r1:02x} != 0')
-        if r2 != 0:
-            raise ParseError(f'SD IPv4 option with reserved 2 = 0x{r2:02x} != 0')
-
         addr = ipaddress.IPv4Address(addr_b)
         l4proto = L4Protocols(l4proto_b)
 
@@ -535,11 +526,6 @@ class SOMEIPSDIPv6EndpointOption(SOMEIPSDAbstractOption):
             raise ParseError(f'SD IPv4 option with wrong payload length {len(buf)} != 9')
 
         r1, addr_b, r2, l4proto_b, port = cls.__format.unpack(buf)
-
-        if r1 != 0:
-            raise ParseError(f'SD IPv6 option with reserved 1 = 0x{r1:02x} != 0')
-        if r2 != 0:
-            raise ParseError(f'SD IPv6 option with reserved 2 = 0x{r2:02x} != 0')
 
         addr = ipaddress.IPv6Address(addr_b)
         l4proto = L4Protocols(l4proto_b)
@@ -578,9 +564,6 @@ class SOMEIPSDHeader:
     def parse(cls, buf: bytes) -> typing.Tuple['SOMEIPSDHeader', bytes]:
         if len(buf) < 12:
             raise IncompleteReadError(f'can not parse SOMEIPSDHeader, got only {len(buf)} bytes')
-
-        if buf[1:4] != b'\0\0\0':
-            raise ParseError(f'SD header with reserved = {buf[1:4]!r} != 0')
 
         flags = buf[0]
 

@@ -227,9 +227,6 @@ class TestHeader(unittest.TestCase):
         with self.assertRaises(hdr.ParseError):
             hdr.SOMEIPSDOption.parse(b'\x00\x04\x02\x00\x12\x34\x56')
 
-        with self.assertRaises(hdr.ParseError):
-            hdr.SOMEIPSDOption.parse(b'\x00\x05\x02\xff\x12\x34\x56\x78')
-
     def test_sdoption_ipv4(self):
         payload = b'\x00\x09\x04\x00\x01\x02\xfe\xff\x00\x06\x03\xff'
         option = hdr.SOMEIPSDIPv4EndpointOption(
@@ -241,12 +238,6 @@ class TestHeader(unittest.TestCase):
 
         with self.assertRaises(hdr.ParseError):
             hdr.SOMEIPSDOption.parse(b'\x00\x0a\x04\x00\x01\x02\xfe\xff\x00\x06\x03\xff\xff')
-
-        with self.assertRaises(hdr.ParseError):
-            hdr.SOMEIPSDOption.parse(b'\x00\x09\x04\xaa\x01\x02\xfe\xff\x00\x06\x03\xff')
-
-        with self.assertRaises(hdr.ParseError):
-            hdr.SOMEIPSDOption.parse(b'\x00\x09\x04\x00\x01\x02\xfe\xff\xbb\x06\x03\xff')
 
     def test_sdoption_config(self):
         payload = b'\x00\x02\x01\x00\x00'
@@ -267,9 +258,6 @@ class TestHeader(unittest.TestCase):
 
         with self.assertRaises(hdr.ParseError):
             hdr.SOMEIPSDOption.parse(b'\x00\x01\x01\x00')
-
-        with self.assertRaises(hdr.ParseError):
-            hdr.SOMEIPSDOption.parse(b'\x00\x02\x01\xff\x00')
 
         with self.assertRaises(hdr.ParseError):
             hdr.SOMEIPSDOption.parse(b'\x00\x03\x01\x00\x01\x00')
