@@ -229,7 +229,7 @@ class TestHeader(unittest.TestCase):
 
     def test_sdoption_ipv4(self):
         payload = b'\x00\x09\x04\x00\x01\x02\xfe\xff\x00\x06\x03\xff'
-        option = hdr.SOMEIPSDIPv4EndpointOption(
+        option = hdr.IPv4EndpointOption(
             address=ipaddress.IPv4Address('1.2.254.255'),
             l4proto=hdr.L4Protocols.TCP,
             port=1023
@@ -309,12 +309,12 @@ class TestHeader(unittest.TestCase):
             ),
         ]
         options = [
-            hdr.SOMEIPSDIPv4EndpointOption(
+            hdr.IPv4EndpointOption(
                 address=ipaddress.IPv4Address('1.2.3.4'),
                 l4proto=hdr.L4Protocols.UDP,
                 port=2047
             ),
-            hdr.SOMEIPSDIPv4EndpointOption(
+            hdr.IPv4EndpointOption(
                 address=ipaddress.IPv4Address('254.253.252.251'),
                 l4proto=hdr.L4Protocols.UDP,
                 port=65535

@@ -23,10 +23,9 @@ def _sockaddr_to_endpoint(sockaddr: typing.Tuple, protocol=someip.header.L4Proto
     addr = ipaddress.ip_address(host)
 
     if isinstance(addr, ipaddress.IPv4Address):
-        return someip.header.SOMEIPSDIPv4EndpointOption(address=addr, l4proto=protocol, port=nport)
+        return someip.header.IPv4EndpointOption(address=addr, l4proto=protocol, port=nport)
     elif isinstance(addr, ipaddress.IPv6Address):
-        return someip.header.SOMEIPSDIPv6EndpointOption(address=addr, l4proto=protocol, port=nport)
-        raise NotImplementedError
+        return someip.header.IPv6EndpointOption(address=addr, l4proto=protocol, port=nport)
     else:
         raise TypeError('unsupported IP address family')
 
