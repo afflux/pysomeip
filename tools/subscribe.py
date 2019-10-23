@@ -6,20 +6,21 @@ import typing
 
 import someip.header
 from someip.config import Eventgroup
-from someip.sd import SubscriptionProtocol, DatagramProtocol
+from someip.sd import SubscriptionProtocol, SOMEIPDatagramProtocol
 
 
 def enhex(buf, sep=' '):
     return sep.join('%02x' % b for b in buf)
 
 
-class Prot(DatagramProtocol):
+class Prot(SOMEIPDatagramProtocol):
     def __init__(self):
         super().__init__(logger='notification')
 
     def message_received(self,
                          someip_message: someip.header.SOMEIPHeader,
-                         addr: typing.Tuple[str, int]) -> None:
+                         addr: typing.Tuple[str, int],
+                         multicast: bool) -> None:
         '''
         called when a well-formed SOME/IP datagram was received
         '''
@@ -36,13 +37,12 @@ class Prot(DatagramProtocol):
 
 
 async def run(local_addr, remote_addr, port, service, instance, major_version, eventgroup_id):
-    local_transport, _ = await asyncio.get_event_loop().create_datagram_endpoint(
-        Prot,
-        local_addr=(str(local_addr), 0),
-    )
+    local_transport, _ = await Prot.create_unicast_endpoint(local_addr=(str(local_addr), 0))
 
-    transport, protocol = await SubscriptionProtocol.create_endpoint(local_addr=local_addr,
-                                                                     remote_addr=remote_addr)
+    transport, protocol = await SubscriptionProtocol.create_unicast_endpoint(
+        local_addr=(str(local_addr), port),
+        remote_addr=(str(remote_addr), port),
+    )
 
     protocol.subscribe_eventgroup(Eventgroup(service, instance, major_version, eventgroup_id))
 
@@ -54,7 +54,7 @@ async def run(local_addr, remote_addr, port, service, instance, major_version, e
     except asyncio.CancelledError:
         pass
     finally:
-        await protocol.stop()
+        protocol.stop()
         transport.close()
         local_transport.close()
 

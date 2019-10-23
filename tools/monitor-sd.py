@@ -8,7 +8,7 @@ from someip.sd import ServiceDiscoveryProtocol as SDProto
 
 
 async def run(local_addr, multicast_addr, port, services):
-    transport, protocol = await SDProto.create_endpoint(
+    trsp_u, trsp_m, protocol = await SDProto.create_endpoints(
         local_addr=local_addr,
         multicast_addr=multicast_addr,
         port=port,
@@ -26,7 +26,8 @@ async def run(local_addr, multicast_addr, port, services):
     except asyncio.CancelledError:
         pass
     finally:
-        transport.close()
+        trsp_u.close()
+        trsp_m.close()
 
 
 def auto_int(s):

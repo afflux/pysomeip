@@ -47,18 +47,23 @@ def _addr_to_ifindex(addr: _T_IPADDR) -> typing.Optional[int]:
     return None
 
 
-class DatagramProtocol(asyncio.DatagramProtocol):
+class SOMEIPDatagramProtocol:
+    '''
+    is actually not a subclass of asyncio.BaseProtocol or asyncio.DatagramProtocol,
+    because datagram_received() has an additional parameter `multicast: bool`
+
+    TODO: fix misleading name
+    '''
+
     def __init__(self, logger: str = 'someip'):
         self.log = logging.getLogger(logger)
+        self.transport: asyncio.DatagramTransport = None
 
-    def connection_made(self, transport: asyncio.DatagramTransport):
-        self.transport = transport
-
-    def datagram_received(self, data, addr: typing.Tuple[str, int]) -> None:
+    def datagram_received(self, data, addr: typing.Tuple[str, int], multicast: bool) -> None:
         try:
             while data:
                 parsed, data = someip.header.SOMEIPHeader.parse(data)
-                self.message_received(parsed, addr)
+                self.message_received(parsed, addr, multicast)
         except someip.header.ParseError as exc:
             self.log.error('failed to parse SOME/IP datagram from %s:%d: %r',
                            addr[0], addr[1], data, exc_info=exc)
@@ -68,7 +73,8 @@ class DatagramProtocol(asyncio.DatagramProtocol):
 
     def message_received(self,
                          someip_message: someip.header.SOMEIPHeader,
-                         addr: typing.Tuple[str, int]) -> None:
+                         addr: typing.Tuple[str, int],
+                         multicast: bool) -> None:
         '''
         called when a well-formed SOME/IP datagram was received
         '''
@@ -76,10 +82,26 @@ class DatagramProtocol(asyncio.DatagramProtocol):
         pass
 
 
-class _BaseSDProtocol(DatagramProtocol):
+class DatagramProtocolAdapter(asyncio.DatagramProtocol):
+    def __init__(self, protocol: SOMEIPDatagramProtocol, is_multicast: bool):
+        self.is_multicast = is_multicast
+        self.protocol = protocol
+
+    def datagram_received(self, data, addr: typing.Tuple[str, int]) -> None:
+        self.protocol.datagram_received(data, addr, multicast=self.is_multicast)
+
+    def error_received(self, exc: BaseException) -> None:
+        self.protocol.error_received(exc)
+
+
+class _BaseSDProtocol(SOMEIPDatagramProtocol):
+    def __init__(self, logger: str):
+        super().__init__(logger=logger)
+
     def message_received(self,
                          someip_message: someip.header.SOMEIPHeader,
-                         addr: typing.Tuple[str, int]) -> None:
+                         addr: typing.Tuple[str, int],
+                         multicast: bool) -> None:
 
         if someip_message.service_id != someip.header.SD_SERVICE \
                 or someip_message.method_id != someip.header.SD_METHOD \
@@ -93,14 +115,17 @@ class _BaseSDProtocol(DatagramProtocol):
             self.log.error('SD-message did not parse: %r', exc)
             return
 
+        # FIXME this will drop the SD Endpoint options, since they are not referenced by entries
+        # see 4.2.1 TR_SOMEIP_00548
         sdhdr.resolve_options()
-        self.sd_message_received(sdhdr, addr)
+        self.sd_message_received(sdhdr, addr, multicast)
 
         if rest:
             self.log.warning('unparsed data after SD from %s:%d: %r', addr[0], addr[1], rest)
 
     def sd_message_received(self, sdhdr: someip.header.SOMEIPSDHeader,
-                            addr: typing.Tuple[str, int]) -> None:
+                            addr: typing.Tuple[str, int],
+                            multicast: bool) -> None:
         '''
         called when a well-formed SOME/IP SD message was received
         '''
@@ -125,11 +150,13 @@ class SubscriptionProtocol(_BaseSDProtocol):
                               loop=None):
         if loop is None:
             loop = asyncio.get_event_loop()
+        protocol = cls(service_ttl)
         transport, protocol = await loop.create_datagram_endpoint(
-            lambda: cls(service_ttl),
+            lambda: DatagramProtocolAdapter(protocol, is_multicast=False),
             local_addr=(str(local_addr), local_port),
             remote_addr=(str(remote_addr), port),
         )
+        protocol.transport = transport
         return transport, protocol
 
     def __init__(self, ttl=5):
@@ -143,7 +170,6 @@ class SubscriptionProtocol(_BaseSDProtocol):
         self.alive = False
 
         self.endpoint_addr = None
-        self.transport = None
 
         self.subscribeentries: typing.Set[someip.config.Eventgroup] = set()
 
@@ -156,12 +182,12 @@ class SubscriptionProtocol(_BaseSDProtocol):
         except KeyError:
             return
 
-        if not self.transport:
-            return
-
         self._send_stop_subscribe([eventgroup])
 
     def _send_stop_subscribe(self, entries: typing.Sequence[someip.config.Eventgroup]) -> None:
+        if not self.transport:
+            return
+
         sdhdr = someip.header.SOMEIPSDHeader(
             flag_reboot=True,
             flag_unicast=True,
@@ -270,7 +296,8 @@ class SubscriptionProtocol(_BaseSDProtocol):
             raise
 
     def sd_message_received(self, sdhdr: someip.header.SOMEIPSDHeader,
-                            addr: typing.Tuple[str, int]) -> None:
+                            addr: typing.Tuple[str, int],
+                            multicast: bool) -> None:
         '''
         called when a well-formed SOME/IP SD message was received
         '''
@@ -293,15 +320,15 @@ class _BaseMulticastSDProtocol(_BaseSDProtocol):
     REQUEST_RESPONSE_DELAY_MAX = 0.5   # in seconds
     REPETITIONS_MAX = 4
     REPETITIONS_BASE_DELAY = 0.03  # in seconds
-    CYCLIC_ANNOUNCE_DELAY = 1  # in seconds
+    CYCLIC_OFFER_DELAY = 1  # in seconds
 
     def __init__(self, multicast_addr: typing.Tuple[str, int], logger: str = 'someip.sd.abstract'):
         super().__init__(logger=logger)
         self.multicast_addr = multicast_addr
 
     @classmethod
-    async def create_endpoint(cls, local_addr: _T_IPADDR, multicast_addr: _T_IPADDR,
-                              port: int = 30490, ttl=1, loop=None):
+    async def create_endpoints(cls, local_addr: _T_IPADDR, multicast_addr: _T_IPADDR,
+                               port: int = 30490, ttl=1, loop=None):
         if loop is None:
             loop = asyncio.get_event_loop()
         if not multicast_addr.is_multicast:
@@ -314,17 +341,33 @@ class _BaseMulticastSDProtocol(_BaseSDProtocol):
         else:
             raise ValueError('local_addr must be ipv4 or ipv6 address')
 
-        # create_datagram_endpoint could set up the socket as well, but does not allow binding to ''
-        # we need to bind to any address, with a fixed port
-        sock = socket.socket(family, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        sock.bind(('', port))
+        # since posix does not provide a portable interface to figure out what address a datagram
+        # was received on, we need one unicast and one multicast socket
+        prot = cls((str(multicast_addr), port))
 
-        transport, protocol = await loop.create_datagram_endpoint(
-            lambda: cls((str(multicast_addr), port)),
-            sock=sock
+        trsp_u, _ = await loop.create_datagram_endpoint(
+            lambda: DatagramProtocolAdapter(prot, is_multicast=False),
+            local_addr=(str(local_addr), port),
+            family=family,
+            proto=socket.IPPROTO_UDP,
+            reuse_address=True,
+            reuse_port=True,
         )
+        prot.transport = trsp_u
+
+        trsp_m, _ = await loop.create_datagram_endpoint(
+            lambda: DatagramProtocolAdapter(prot, is_multicast=True),
+            local_addr=((str(multicast_addr), port)),
+            family=family,
+            proto=socket.IPPROTO_UDP,
+            reuse_address=True,
+            reuse_port=True,
+        )
+
+        sock = trsp_m.get_extra_info('socket')
+
+        if not sock:
+            raise RuntimeError('trsp_m has no socket')
 
         ifindex = _addr_to_ifindex(local_addr)
 
@@ -343,7 +386,7 @@ class _BaseMulticastSDProtocol(_BaseSDProtocol):
             sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS, ttl)
             sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_LOOP, 0)
 
-        return transport, protocol
+        return trsp_u, trsp_m, prot
 
     def _write(self, buf: bytes, remote: _T_OPT_ADDR = None):
         # ideally, we'd use transport.write() and have the DGRAM socket connected to the
@@ -380,7 +423,8 @@ class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
         self.found_services: typing.Dict[someip.config.Service, typing.Optional[asyncio.Task]] = {}
 
     def sd_message_received(self, sdhdr: someip.header.SOMEIPSDHeader,
-                            addr: typing.Tuple[str, int]) -> None:
+                            addr: typing.Tuple[str, int],
+                            multicast: bool) -> None:
         '''
         called when a well-formed SOME/IP SD message was received
         '''
@@ -389,12 +433,16 @@ class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
         for entry in sdhdr.entries:
             if entry.sd_type != someip.header.SOMEIPSDEntryType.OfferService:
                 continue
-            if not self.is_watching_service(entry):
-                continue
-            if entry.ttl == 0:
-                self.service_offer_stopped(addr, entry)
-            else:
-                self.service_offered(addr, entry)
+            asyncio.get_event_loop().call_soon(self._handle_offer, addr, entry)
+
+    def _handle_offer(self, addr: typing.Tuple[str, int],
+                      entry: someip.header.SOMEIPSDEntry) -> None:
+        if not self.is_watching_service(entry):
+            return
+        if entry.ttl == 0:
+            self.service_offer_stopped(addr, entry)
+        else:
+            self.service_offered(addr, entry)
 
     def is_watching_service(self, entry: someip.header.SOMEIPSDEntry):
         if not self.watched_services:
@@ -497,12 +545,15 @@ class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
 
 class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
     # TODO doc
+    TTL = 3
 
     def __init__(self, multicast_addr: typing.Tuple[str, int], logger: str = 'someip.sd.announce'):
         super().__init__(logger=logger, multicast_addr=multicast_addr)
 
         self.task = None
         self.alive = False
+        self._can_answer_offers = False
+        self._last_multicast_offer: float = 0
 
         self.announcing_services: typing.Set[someip.config.Service] = set()
 
@@ -510,7 +561,8 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
         self.announcing_services.add(service)
 
     def sd_message_received(self, sdhdr: someip.header.SOMEIPSDHeader,
-                            addr: typing.Tuple[str, int]) -> None:
+                            addr: typing.Tuple[str, int],
+                            multicast: bool) -> None:
         '''
         called when a well-formed SOME/IP SD message was received
         '''
@@ -521,7 +573,9 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
                 continue
             elif entry.sd_type == someip.header.SOMEIPSDEntryType.FindService:
                 self.log.info('received from %s:%d: %s', addr[0], addr[1], entry)
-                asyncio.create_task(self._handle_findservice(entry, addr))
+                asyncio.create_task(
+                    self._handle_findservice(entry, addr, multicast, sdhdr.flag_unicast)
+                )
             elif entry.sd_type == someip.header.SOMEIPSDEntryType.Subscribe:
                 self.log.info('received from %s:%d: %s', addr[0], addr[1], entry)
                 # TODO handle Subscribe Eventgroup
@@ -529,16 +583,39 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
                 self.log.info('received unexpected from %s:%d: %s', addr[0], addr[1], entry)
 
     async def _handle_findservice(self, entry: someip.header.SOMEIPSDEntry,
-                                  addr: typing.Tuple[str, int]) -> None:
+                                  addr: typing.Tuple[str, int],
+                                  received_over_multicast: bool,
+                                  unicast_supported: bool) -> None:
         try:
+            if not self._can_answer_offers:
+                # 4.2.1 SWS_SD_00319
+                LOG.info('ignoring FindService from %s:%d during Initial Wait Phase: %s',
+                         addr[0], addr[1], entry)
+                return
+
             parsed_addr = (ipaddress.ip_address(addr[0]), addr[1])
             local_services = [s for s in self.announcing_services if s.matches_find(entry)]
             if not local_services:
                 return
-            # FIXME this should not sleep when received over unicast. probably needs two sockets...
-            await asyncio.sleep(random.uniform(self.REQUEST_RESPONSE_DELAY_MIN,
-                                               self.REQUEST_RESPONSE_DELAY_MAX))
-            self._send_offers(local_services, remote=parsed_addr)
+
+            # 4.2.1 TR_SOMEIP_00423
+            # unfortunately the spec is unclear on whether the multicast response should
+            # refresh the CYCLIC_OFFER_DELAY timer when the multicast send condition is fulfilled.
+            # => assume no, since that would only work if all services were sent out
+            time_since_last_offer = asyncio.get_event_loop().time() - self._last_multicast_offer
+            answer_with_multicast = time_since_last_offer > self.CYCLIC_OFFER_DELAY/2 \
+                or not unicast_supported
+
+            # 4.2.1 TR_SOMEIP_00419
+            if received_over_multicast or answer_with_multicast:
+                # 4.2.1 TR_SOMEIP_00420 and TR_SOMEIP_00421
+                await asyncio.sleep(random.uniform(self.REQUEST_RESPONSE_DELAY_MIN,
+                                                   self.REQUEST_RESPONSE_DELAY_MAX))
+
+            if answer_with_multicast:
+                self._send_offers(local_services)
+            else:
+                self._send_offers(local_services, remote=parsed_addr)
         except Exception:
             self.log.exception('exception in _handle_findservice')
             raise
@@ -550,25 +627,47 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
             loop = asyncio.get_event_loop()
 
         self.alive = True
+        self._can_answer_offers = False
         self.task = loop.create_task(self._announce())
+
+    async def stop(self):
+        self.alive = False
+
+        if self.task:
+            self.task.cancel()
+            await self.task
+            self.task = None
 
     async def _announce(self):
         try:
             await asyncio.sleep(random.uniform(self.INITIAL_DELAY_MIN, self.INITIAL_DELAY_MAX))
-            for i in range(self.REPETITIONS_MAX):
-                self._send_offers(self.announcing_services)
-                await asyncio.sleep((2**i) * self.REPETITIONS_BASE_DELAY)
+            self._send_offers(self.announcing_services)
 
-            while True:
+            self._can_answer_offers = True
+            for i in range(self.REPETITIONS_MAX):
+                await asyncio.sleep((2**i) * self.REPETITIONS_BASE_DELAY)
+                if not self.alive:
+                    return
                 self._send_offers(self.announcing_services)
-                await asyncio.sleep(self.CYCLIC_ANNOUNCE_DELAY)
+
+            if not self.CYCLIC_OFFER_DELAY:  # SWS_SD_00451
+                return
+
+            while self.alive:
+                await asyncio.sleep(self.CYCLIC_OFFER_DELAY)
+                self._send_offers(self.announcing_services)
         except Exception:
             self.log.exception('exception in _announce')
             raise
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self._send_offers(self.announcing_services, stop=True)
 
     def _send_offers(self, services: typing.Sequence[someip.config.Service],
-                     remote: _T_OPT_ADDR = None):
-        entries = [s.create_offer_entry() for s in services]
+                     remote: _T_OPT_ADDR = None,
+                     stop: bool = False):
+        entries = [s.create_offer_entry(self.TTL if not stop else 0) for s in services]
 
         sdhdr = someip.header.SOMEIPSDHeader(
             flag_reboot=True,
@@ -588,4 +687,6 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
 
         hdr.payload = sdhdr.build()
         buf = hdr.build()
+        if not remote:
+            self._last_multicast_offer = asyncio.get_event_loop().time()
         self._write(buf, remote=remote)
