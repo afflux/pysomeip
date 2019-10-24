@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import ipaddress
 import logging
 import random
@@ -45,6 +46,30 @@ def _addr_to_ifindex(addr: _T_IPADDR) -> typing.Optional[int]:
                 return ifindex
 
     return None
+
+
+def log_exceptions(msg):
+    '''
+    decorator that will catch all exceptions in methods and coroutine methods
+    and log them with self.log
+    '''
+    def decorator(f):
+        if asyncio.iscoroutinefunction(f):
+            @functools.wraps(f)
+            async def wrapper(self, *args, **kwargs):
+                try:
+                    return await f(self, *args, **kwargs)
+                except Exception:
+                    self.log.exception(msg.format(*args, **kwargs))
+        else:
+            @functools.wraps(f)
+            def wrapper(self, *args, **kwargs):
+                try:
+                    return f(self, *args, **kwargs)
+                except Exception:
+                    self.log.exception(msg.format(*args, **kwargs))
+        return wrapper
+    return decorator
 
 
 class SOMEIPDatagramProtocol:
@@ -239,61 +264,58 @@ class SubscriptionProtocol(_BaseSDProtocol):
         if self.send_stop_subscribe:
             self._send_stop_subscribe(self.subscribeentries)
 
+    @log_exceptions('unhandled exception in _subscribe')
     async def _subscribe(self):
-        try:
-            endpoint_option = _sockaddr_to_endpoint(self.endpoint_addr,
-                                                    someip.header.L4Protocols.UDP)
+        endpoint_option = _sockaddr_to_endpoint(self.endpoint_addr,
+                                                someip.header.L4Protocols.UDP)
 
-            sdhdr = someip.header.SOMEIPSDHeader(
-                flag_reboot=True,
-                flag_unicast=True,
-                entries=[someip.header.SOMEIPSDEntry(
-                        sd_type=someip.header.SOMEIPSDEntryType.Subscribe,
-                        options_1=[endpoint_option],
-                        options_2=[],
-                        service_id=e.service_id,
-                        instance_id=e.instance_id,
-                        major_version=e.major_version,
-                        ttl=0xffffff if self.ttl is None else self.ttl,
-                        minver_or_counter=e.eventgroup_id,
-                    ) for e in self.subscribeentries],
-            )
-            sdhdr.assign_option_indexes()
+        sdhdr = someip.header.SOMEIPSDHeader(
+            flag_reboot=True,
+            flag_unicast=True,
+            entries=[someip.header.SOMEIPSDEntry(
+                    sd_type=someip.header.SOMEIPSDEntryType.Subscribe,
+                    options_1=[endpoint_option],
+                    options_2=[],
+                    service_id=e.service_id,
+                    instance_id=e.instance_id,
+                    major_version=e.major_version,
+                    ttl=0xffffff if self.ttl is None else self.ttl,
+                    minver_or_counter=e.eventgroup_id,
+                ) for e in self.subscribeentries],
+        )
+        sdhdr.assign_option_indexes()
 
-            hdr = someip.header.SOMEIPHeader(
-                service_id=someip.header.SD_SERVICE,
-                method_id=someip.header.SD_METHOD,
-                client_id=0,
-                session_id=0,
-                interface_version=1,
-                message_type=someip.header.SOMEIPMessageType.NOTIFICATION,
-            )
+        hdr = someip.header.SOMEIPHeader(
+            service_id=someip.header.SD_SERVICE,
+            method_id=someip.header.SD_METHOD,
+            client_id=0,
+            session_id=0,
+            interface_version=1,
+            message_type=someip.header.SOMEIPMessageType.NOTIFICATION,
+        )
 
-            while self.alive:
-                hdr.payload = sdhdr.build()
-                self.transport.sendto(hdr.build())
+        while self.alive:
+            hdr.payload = sdhdr.build()
+            self.transport.sendto(hdr.build())
 
-                if self.ttl is None:
-                    break
+            if self.ttl is None:
+                break
 
-                if self.ttl_offset >= self.ttl:
-                    raise ValueError('ttl_offset too big')
+            if self.ttl_offset >= self.ttl:
+                raise ValueError('ttl_offset too big')
 
-                try:
-                    await asyncio.sleep(self.ttl - self.ttl_offset)
-                except asyncio.CancelledError:
-                    break
+            try:
+                await asyncio.sleep(self.ttl - self.ttl_offset)
+            except asyncio.CancelledError:
+                break
 
-                hdr.session_id += 1
-                if hdr.session_id >= 0x10000:
-                    # Specification of Service Discovery, Autosar 4.3.1, SWS_SD_00036
-                    hdr.session_id = 1
+            hdr.session_id += 1
+            if hdr.session_id >= 0x10000:
+                # Specification of Service Discovery, Autosar 4.3.1, SWS_SD_00036
+                hdr.session_id = 1
 
-                    # Specification of Service Discovery, Autosar 4.3.1, SWS_SD_00151
-                    sdhdr.flag_reboot = False
-        except Exception:
-            self.log.exception('exception in _subscribe')
-            raise
+                # Specification of Service Discovery, Autosar 4.3.1, SWS_SD_00151
+                sdhdr.flag_reboot = False
 
     def sd_message_received(self, sdhdr: someip.header.SOMEIPSDHeader,
                             addr: typing.Tuple[str, int],
@@ -501,6 +523,7 @@ class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
 
         self.found_services[service] = timeout_task
 
+    @log_exceptions('exception in _service_timeout for {0!r}')
     async def _service_timeout(self, service, ttl) -> None:
         try:
             await asyncio.sleep(ttl)
@@ -514,9 +537,6 @@ class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
             self._notify_service_stopped(service)
         except asyncio.CancelledError:
             pass
-        except Exception:
-            self.log.exception('exception in _service_timeout for %r', service)
-            raise
 
     def service_offer_stopped(self, addr: typing.Tuple[str, int],
                               entry: someip.header.SOMEIPSDEntry) -> None:
@@ -582,43 +602,40 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
             else:
                 self.log.info('received unexpected from %s:%d: %s', addr[0], addr[1], entry)
 
+    @log_exceptions('exception in _handle_findservice')
     async def _handle_findservice(self, entry: someip.header.SOMEIPSDEntry,
                                   addr: typing.Tuple[str, int],
                                   received_over_multicast: bool,
                                   unicast_supported: bool) -> None:
-        try:
-            if not self._can_answer_offers:
-                # 4.2.1 SWS_SD_00319
-                LOG.info('ignoring FindService from %s:%d during Initial Wait Phase: %s',
-                         addr[0], addr[1], entry)
-                return
+        if not self._can_answer_offers:
+            # 4.2.1 SWS_SD_00319
+            LOG.info('ignoring FindService from %s:%d during Initial Wait Phase: %s',
+                     addr[0], addr[1], entry)
+            return
 
-            parsed_addr = (ipaddress.ip_address(addr[0]), addr[1])
-            local_services = [s for s in self.announcing_services if s.matches_find(entry)]
-            if not local_services:
-                return
+        parsed_addr = (ipaddress.ip_address(addr[0]), addr[1])
+        local_services = [s for s in self.announcing_services if s.matches_find(entry)]
+        if not local_services:
+            return
 
-            # 4.2.1 TR_SOMEIP_00423
-            # unfortunately the spec is unclear on whether the multicast response should
-            # refresh the CYCLIC_OFFER_DELAY timer when the multicast send condition is fulfilled.
-            # => assume no, since that would only work if all services were sent out
-            time_since_last_offer = asyncio.get_event_loop().time() - self._last_multicast_offer
-            answer_with_multicast = time_since_last_offer > self.CYCLIC_OFFER_DELAY/2 \
-                or not unicast_supported
+        # 4.2.1 TR_SOMEIP_00423
+        # unfortunately the spec is unclear on whether the multicast response should
+        # refresh the CYCLIC_OFFER_DELAY timer when the multicast send condition is fulfilled.
+        # => assume no, since that would only work if all services were sent out
+        time_since_last_offer = asyncio.get_event_loop().time() - self._last_multicast_offer
+        answer_with_multicast = time_since_last_offer > self.CYCLIC_OFFER_DELAY/2 \
+            or not unicast_supported
 
-            # 4.2.1 TR_SOMEIP_00419
-            if received_over_multicast or answer_with_multicast:
-                # 4.2.1 TR_SOMEIP_00420 and TR_SOMEIP_00421
-                await asyncio.sleep(random.uniform(self.REQUEST_RESPONSE_DELAY_MIN,
-                                                   self.REQUEST_RESPONSE_DELAY_MAX))
+        # 4.2.1 TR_SOMEIP_00419
+        if received_over_multicast or answer_with_multicast:
+            # 4.2.1 TR_SOMEIP_00420 and TR_SOMEIP_00421
+            await asyncio.sleep(random.uniform(self.REQUEST_RESPONSE_DELAY_MIN,
+                                               self.REQUEST_RESPONSE_DELAY_MAX))
 
-            if answer_with_multicast:
-                self._send_offers(local_services)
-            else:
-                self._send_offers(local_services, remote=parsed_addr)
-        except Exception:
-            self.log.exception('exception in _handle_findservice')
-            raise
+        if answer_with_multicast:
+            self._send_offers(local_services)
+        else:
+            self._send_offers(local_services, remote=parsed_addr)
 
     def start(self, loop=None):
         if self.task is not None or self.alive:
@@ -638,6 +655,7 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
             await self.task
             self.task = None
 
+    @log_exceptions('exception in _announce')
     async def _announce(self):
         try:
             await asyncio.sleep(random.uniform(self.INITIAL_DELAY_MIN, self.INITIAL_DELAY_MAX))
@@ -656,9 +674,6 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
             while self.alive:
                 await asyncio.sleep(self.CYCLIC_OFFER_DELAY)
                 self._send_offers(self.announcing_services)
-        except Exception:
-            self.log.exception('exception in _announce')
-            raise
         except asyncio.CancelledError:
             pass
         finally:
