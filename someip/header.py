@@ -600,8 +600,8 @@ class SOMEIPSDIPv6EndpointOption(SOMEIPSDAbstractOption):
 class SOMEIPSDHeader:
     entries: typing.Sequence[SOMEIPSDEntry]
     options: typing.Sequence[SOMEIPSDOption] = dataclasses.field(default_factory=list)
-    flag_reboot: bool = dataclasses.field(default=False)
-    flag_unicast: bool = dataclasses.field(default=False)
+    flag_reboot: bool = dataclasses.field(default=True)
+    flag_unicast: bool = dataclasses.field(default=True)
     flags_unknown: int = dataclasses.field(default=0)
 
     def resolve_options(self):
