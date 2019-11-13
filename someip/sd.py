@@ -13,6 +13,7 @@ import netifaces
 
 import someip.header
 import someip.config
+from someip.utils import log_exceptions
 
 LOG = logging.getLogger('someip.sd')
 _T_IPADDR = typing.Union[ipaddress.IPv4Address, ipaddress.IPv6Address]
@@ -50,30 +51,6 @@ def _addr_to_ifindex(addr: _T_IPADDR) -> typing.Optional[int]:
                 return ifindex
 
     return None
-
-
-def log_exceptions(msg):
-    '''
-    decorator that will catch all exceptions in methods and coroutine methods
-    and log them with self.log
-    '''
-    def decorator(f):
-        if asyncio.iscoroutinefunction(f):
-            @functools.wraps(f)
-            async def wrapper(self, *args, **kwargs):
-                try:
-                    return await f(self, *args, **kwargs)
-                except Exception:
-                    self.log.exception(msg.format(*args, **kwargs))
-        else:
-            @functools.wraps(f)
-            def wrapper(self, *args, **kwargs):
-                try:
-                    return f(self, *args, **kwargs)
-                except Exception:
-                    self.log.exception(msg.format(*args, **kwargs))
-        return wrapper
-    return decorator
 
 
 class SOMEIPDatagramProtocol:
@@ -342,7 +319,7 @@ class SubscriptionProtocol(_BaseSDProtocol):
         self.log.exception('connection lost. stopping subscribe task', exc_info=exc)
         self.stop(send_stop_subscribe=False)
 
-    @log_exceptions('unhandled exception in _subscribe')
+    @log_exceptions()
     async def _subscribe(self):
         endpoint_option = _sockaddr_to_endpoint(self.endpoint_addr,
                                                 someip.header.L4Protocols.UDP)
@@ -666,7 +643,7 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
             else:
                 self.log.info('received unexpected from %s:%d: %s', addr[0], addr[1], entry)
 
-    @log_exceptions('exception in _handle_findservice')
+    @log_exceptions()
     async def _handle_findservice(self, entry: someip.header.SOMEIPSDEntry,
                                   addr: typing.Tuple[str, int],
                                   received_over_multicast: bool,
@@ -723,7 +700,7 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
         self.log.exception('connection lost. stopping announce task', exc_info=exc)
         self.stop()
 
-    @log_exceptions('exception in _announce')
+    @log_exceptions()
     async def _announce(self):
         try:
             await asyncio.sleep(random.uniform(self.INITIAL_DELAY_MIN, self.INITIAL_DELAY_MAX))
