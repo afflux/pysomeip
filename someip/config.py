@@ -1,7 +1,12 @@
 import dataclasses
+import ipaddress
+import socket
 import typing
 
 import someip.header
+
+
+_T_ADDR = typing.Tuple[typing.Union[ipaddress.IPv4Address, ipaddress.IPv6Address], int]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -10,6 +15,40 @@ class Eventgroup:
     instance_id: int
     major_version: int
     eventgroup_id: int
+
+    sockname: typing.Tuple
+
+    protocol: someip.header.L4Protocols
+
+    def create_subscribe_entry(self, ttl=3):
+        endpoint_option = self._sockaddr_to_endpoint(self.sockname, self.protocol)
+        return someip.header.SOMEIPSDEntry(sd_type=someip.header.SOMEIPSDEntryType.Subscribe,
+                                           service_id=self.service_id,
+                                           instance_id=self.instance_id,
+                                           major_version=self.major_version,
+                                           ttl=ttl,
+                                           minver_or_counter=self.eventgroup_id,
+                                           options_1=[endpoint_option])
+
+    @staticmethod
+    def _sockaddr_to_endpoint(sockname: typing.Tuple, protocol: someip.header.L4Protocols) \
+            -> someip.header.SOMEIPSDOption:
+        host, port = socket.getnameinfo(sockname,
+                                        socket.NI_NUMERICHOST | socket.NI_NUMERICSERV)
+        nport = int(port)
+        naddr = ipaddress.ip_address(host)
+
+        if isinstance(naddr, ipaddress.IPv4Address):
+            return someip.header.IPv4EndpointOption(address=naddr, l4proto=protocol, port=nport)
+        elif isinstance(naddr, ipaddress.IPv6Address):
+            return someip.header.IPv6EndpointOption(address=naddr, l4proto=protocol, port=nport)
+        else:
+            raise TypeError('unsupported IP address family')
+
+    def __str__(self) -> str:
+        return f'eventgroup={self.eventgroup_id:04x} service=0x{self.service_id:04x},' \
+               f' instance=0x{self.instance_id:04x}, version={self.major_version}' \
+               f' addr={self.sockname!r} proto={self.protocol.name}'
 
 
 @dataclasses.dataclass(frozen=True)
