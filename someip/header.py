@@ -491,7 +491,7 @@ class AbstractIPOption(SOMEIPSDAbstractOption):
     port: int
 
     @classmethod
-    def parse_option(cls, buf: bytes) -> 'AbstractEndpointOption':
+    def parse_option(cls, buf: bytes) -> 'AbstractIPOption':
         if len(buf) != cls._format.size:
             raise ParseError(f'{cls.__name__} with wrong payload length {len(buf)} != 9')
 
@@ -565,35 +565,6 @@ class IPv6MulticastOption(AbstractIPv6Option, MulticastOption):
 @dataclasses.dataclass(frozen=True)
 class IPv6SDEndpointOption(AbstractIPv6Option, SDEndpointOption):
     type_: typing.ClassVar[int] = 0x26
-
-
-@SOMEIPSDOption.register
-@dataclasses.dataclass(frozen=True)
-class SOMEIPSDIPv6EndpointOption(SOMEIPSDAbstractOption):
-    __format: typing.ClassVar[struct.Struct] = struct.Struct('!B16sBBH')
-    type_: typing.ClassVar[int] = 0x16
-    address: ipaddress.IPv6Address
-    l4proto: L4Protocols
-    port: int
-
-    @classmethod
-    def parse_option(cls, buf: bytes) -> 'SOMEIPSDIPv4EndpointOption':
-        if len(buf) != 0x15:
-            raise ParseError(f'SD IPv4 option with wrong payload length {len(buf)} != 9')
-
-        r1, addr_b, r2, l4proto_b, port = cls.__format.unpack(buf)
-
-        addr = ipaddress.IPv6Address(addr_b)
-        l4proto = L4Protocols(l4proto_b)
-
-        return cls(address=addr, l4proto=l4proto, port=port)
-
-    def __str__(self) -> str:
-        return f'[{self.address}]:{self.port} ({self.l4proto.name})'
-
-    def build(self) -> bytes:
-        payload = self.__format.pack(0, self.address.packed, 0, self.l4proto.value, self.port)
-        return self.build_option(self.type_, payload)
 
 
 @dataclasses.dataclass
