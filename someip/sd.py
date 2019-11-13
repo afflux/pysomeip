@@ -251,55 +251,78 @@ class SubscriptionProtocol(_BaseSDProtocol):
         self.task = None
         self.alive = False
 
-        self.endpoint_addr = None
+        self.subscribeentries: typing.Set[typing.Tuple[
+            someip.config.Eventgroup,
+            _T_SOCKADDR
+        ]] = set()
 
-        self.subscribeentries: typing.Set[someip.config.Eventgroup] = set()
+    def subscribe_eventgroup(self, eventgroup: someip.config.Eventgroup, endpoint: _T_SOCKADDR) \
+            -> None:
+        '''
+        eventgroup:
+          someip.config.Eventgroup that describes the eventgroup to subscribe to and the local
+          endpoint that accepts the notifications
+        endpoint:
+          remote SD endpoint that will receive the subscription messages
+        '''
+        # relies on _subscribe() to send out the Subscribe messages in the next cycle.
+        self.subscribeentries.add((eventgroup, endpoint))
 
-    def subscribe_eventgroup(self, eventgroup: someip.config.Eventgroup):
-        self.subscribeentries.add(eventgroup)
+        if self.ttl is None and self.alive:
+            # when TTL=forever, _subscribe() task does not run continuously, so we need to send
+            # individual subscribe entries directly
+            asyncio.get_event_loop().call_soon(self._send_start_subscribe, endpoint, [eventgroup])
 
-    def stop_subscribe_eventgroup(self, eventgroup: someip.config.Eventgroup):
+    def stop_subscribe_eventgroup(self, eventgroup: someip.config.Eventgroup,
+                                  endpoint: _T_SOCKADDR) -> None:
+        '''
+        eventgroup:
+          someip.config.Eventgroup that describes the eventgroup to unsubscribe from
+        endpoint:
+          remote SD endpoint that will receive the subscription messages
+        '''
         try:
-            self.subscribeentries.remove(eventgroup)
+            self.subscribeentries.remove((eventgroup, endpoint))
         except KeyError:
             return
 
-        self._send_stop_subscribe([eventgroup])
+        self._send_stop_subscribe(endpoint, [eventgroup])
 
-    def _send_stop_subscribe(self, entries: typing.Sequence[someip.config.Eventgroup]) -> None:
+    def _send_stop_subscribe(self, remote: _T_SOCKADDR,
+                             entries: typing.Sequence[someip.config.Eventgroup]) -> None:
+        self._send_subscribe(0, remote, entries)
+
+    def _send_start_subscribe(self, remote: _T_SOCKADDR,
+                              entries: typing.Sequence[someip.config.Eventgroup]) -> None:
+        self._send_subscribe(0xffffff if self.ttl is None else self.ttl, remote, entries)
+
+    def _send_subscribe(self, ttl: int, remote: _T_SOCKADDR,
+                        entries: typing.Sequence[someip.config.Eventgroup]) -> None:
         if not self.transport:
+            return
+
+        if not entries:
             return
 
         sdhdr = someip.header.SOMEIPSDHeader(
             flag_reboot=True,
             flag_unicast=True,
-            entries=[someip.header.SOMEIPSDEntry(
-                sd_type=someip.header.SOMEIPSDEntryType.Subscribe,
-                options_1=[],
-                options_2=[],
-                service_id=e.service_id,
-                instance_id=e.instance_id,
-                major_version=e.major_version,
-                ttl=0,
-                minver_or_counter=e.eventgroup_id,
-            ) for e in entries],
+            entries=[e.create_subscribe_entry(ttl=ttl) for e in entries],
         )
         sdhdr.assign_option_indexes()
-        self.send_sd(sdhdr)
 
-    def start(self, endpoint_addr: typing.Tuple, loop=None):
+        self.send_sd(sdhdr, remote=remote)
+
+    def start(self, loop=None):
         if self.task is not None or self.alive:
             return
         if loop is None:
             loop = asyncio.get_event_loop()
 
-        self.endpoint_addr = endpoint_addr
-
         self.alive = True
         self.task = loop.create_task(self._subscribe())
 
     def stop(self, send_stop_subscribe=True):
-        self.endpoint_addr = None
         self.alive = False
 
         if self.task:
@@ -307,7 +330,14 @@ class SubscriptionProtocol(_BaseSDProtocol):
             self.task = None
 
         if self.send_stop_subscribe:
-            self._send_stop_subscribe(self.subscribeentries)
+            for endpoint, entries in self._group_entries().items():
+                self._send_stop_subscribe(endpoint, entries)
+
+    def _group_entries(self):
+        endpoint_entries = collections.defaultdict(set)
+        for eventgroup, endpoint in self.subscribeentries:
+            endpoint_entries[endpoint].add(eventgroup)
+        return endpoint_entries
 
     def connection_lost(self, exc: typing.Optional[Exception]) -> None:
         self.log.exception('connection lost. stopping subscribe task', exc_info=exc)
@@ -315,27 +345,9 @@ class SubscriptionProtocol(_BaseSDProtocol):
 
     @log_exceptions()
     async def _subscribe(self):
-        endpoint_option = _sockaddr_to_endpoint(self.endpoint_addr,
-                                                someip.header.L4Protocols.UDP)
-
-        sdhdr = someip.header.SOMEIPSDHeader(
-            flag_reboot=True,
-            flag_unicast=True,
-            entries=[someip.header.SOMEIPSDEntry(
-                sd_type=someip.header.SOMEIPSDEntryType.Subscribe,
-                options_1=[endpoint_option],
-                options_2=[],
-                service_id=e.service_id,
-                instance_id=e.instance_id,
-                major_version=e.major_version,
-                ttl=0xffffff if self.ttl is None else self.ttl,
-                minver_or_counter=e.eventgroup_id,
-            ) for e in self.subscribeentries],
-        )
-        sdhdr.assign_option_indexes()
-
         while self.alive:
-            self.send_sd(sdhdr)
+            for endpoint, entries in self._group_entries().items():
+                self._send_start_subscribe(endpoint, entries)
 
             if self.ttl is None:
                 break

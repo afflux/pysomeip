@@ -2,11 +2,13 @@
 import asyncio
 import ipaddress
 import logging
+import socket
 import typing
 
 import someip.header
 from someip.config import Eventgroup
 from someip.sd import SubscriptionProtocol, SOMEIPDatagramProtocol
+from someip.utils import getfirstaddrinfo
 
 
 def enhex(buf, sep=' '):
@@ -39,14 +41,26 @@ class Prot(SOMEIPDatagramProtocol):
 async def run(local_addr, remote_addr, port, service, instance, major_version, eventgroup_id):
     local_transport, _ = await Prot.create_unicast_endpoint(local_addr=(str(local_addr), 0))
 
+    remote_sa = (await getfirstaddrinfo(str(remote_addr), port, type=socket.SOCK_DGRAM))[4]
+
     transport, protocol = await SubscriptionProtocol.create_unicast_endpoint(
         local_addr=(str(local_addr), port),
-        remote_addr=(str(remote_addr), port),
     )
 
-    protocol.subscribe_eventgroup(Eventgroup(service, instance, major_version, eventgroup_id))
+    local_sa = local_transport.get_extra_info('sockname')
+    protocol.subscribe_eventgroup(
+        Eventgroup(
+            service,
+            instance,
+            major_version,
+            eventgroup_id,
+            local_sa,
+            someip.header.L4Protocols.UDP
+        ),
+        remote_sa
+    )
 
-    protocol.start(local_transport.get_extra_info('sockname'))
+    protocol.start()
 
     try:
         while True:

@@ -1,5 +1,6 @@
 import asyncio
 import functools
+import socket
 
 
 def log_exceptions(msg='unhandled exception in {__func__}'):
@@ -27,3 +28,22 @@ def log_exceptions(msg='unhandled exception in {__func__}'):
                     self.log.exception(msg.format(__func__=f.__qualname__, *args, **kwargs))
         return wrapper
     return decorator
+
+
+async def getfirstaddrinfo(host, port, family=0, type=0, proto=0, sock=None, flags=0, loop=None):
+    '''
+    retrieve sockaddr for host/port pair with given family, type, proto settings.
+    return first sockaddr. raises socket.gaierror if no result was returned.
+    '''
+    if sock is not None:
+        if family != 0 or type != 0 or proto != 0:
+            raise ValueError('family/type/proto and sock cannot be specified at the same time')
+        family = sock.family
+        type = sock.type
+        proto = sock.proto
+    if loop is None:
+        loop = asyncio.get_event_loop()
+    result = await loop.getaddrinfo(host, port, family=family, type=type, proto=proto, flags=flags)
+    if not result:
+        raise socket.gaierror(f'no address info found for {host}:{port}')
+    return result[0]
