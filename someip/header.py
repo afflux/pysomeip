@@ -269,8 +269,8 @@ class SOMEIPSDEntry:
             s_options_1 = ', '.join(str(o) for o in self.options_1)
             s_options_2 = ', '.join(str(o) for o in self.options_2)
         else:
-            s_options_1 = range(self.option_index_1, self.option_index_1+self.num_options_1)
-            s_options_2 = range(self.option_index_2, self.option_index_2+self.num_options_2)
+            s_options_1 = repr(range(self.option_index_1, self.option_index_1+self.num_options_1))
+            s_options_2 = repr(range(self.option_index_2, self.option_index_2+self.num_options_2))
 
         return f'type={self.sd_type.name}, service=0x{self.service_id:04x},' \
                f' instance=0x{self.instance_id:04x}, version={version}, ttl={self.ttl}, ' \
