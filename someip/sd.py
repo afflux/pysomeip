@@ -455,6 +455,11 @@ class _BaseMulticastSDProtocol(_BaseSDProtocol):
         return trsp_u, trsp_m, prot
 
 
+class ServiceListener:
+    def service_offered(self, service: someip.config.Service) -> None: ...
+    def service_stopped(self, service: someip.config.Service) -> None: ...
+
+
 class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
     '''
     datagram protocol for subscribing to eventgroups via SOME/IP SD
@@ -465,7 +470,12 @@ class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
 
     def __init__(self, multicast_addr: typing.Tuple[str, int], logger: str = 'someip.sd.discover'):
         super().__init__(logger=logger, multicast_addr=multicast_addr)
-        self.watched_services: typing.Set[someip.config.Service] = set()
+        self.watched_services: typing.Dict[
+                someip.config.Service,
+                typing.Set[ServiceListener]
+        ] = collections.defaultdict(set)
+        self.watcher_all_services: typing.Set[ServiceListener] = set()
+
         self.found_services: typing.Dict[
             _T_SOCKADDR,
             typing.Dict[someip.config.Service, typing.Optional[asyncio.Handle]]
@@ -494,12 +504,15 @@ class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
             self.service_offered(addr, entry)
 
     def is_watching_service(self, entry: someip.header.SOMEIPSDEntry):
-        if not self.watched_services:
+        if self.watcher_all_services:
             return True
-        return any(s.matches_offer(entry) for s in self.watched_services)
+        return any(s.matches_offer(entry) for s in self.watched_services.keys())
 
-    def watch_service(self, service: someip.config.Service) -> None:
-        self.watched_services.add(service)
+    def watch_service(self, service: someip.config.Service, listener: ServiceListener) -> None:
+        self.watched_services[service].add(listener)
+
+    def watch_all_services(self, listener: ServiceListener) -> None:
+        self.watcher_all_services.add(listener)
 
     def _service_found(self, service: someip.config.Service) -> bool:
         for d in self.found_services.values():
@@ -515,7 +528,7 @@ class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
         await asyncio.sleep(random.uniform(self.INITIAL_DELAY_MIN, self.INITIAL_DELAY_MAX))
 
         for i in range(self.REPETITIONS_MAX):
-            find_entries = [service.create_find_entry() for service in self.watched_services
+            find_entries = [service.create_find_entry() for service in self.watched_services.keys()
                             if not self._service_found(service)]
 
             sdhdr = someip.header.SOMEIPSDHeader(
@@ -598,12 +611,16 @@ class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
             if service_filter.matches_service(service):
                 for listener in listeners:
                     listener.service_offered(service)
+        for listener in self.watcher_all_services:
+            listener.service_offered(service)
 
     def _notify_service_stopped(self, service: someip.config.Service) -> None:
         for service_filter, listeners in self.watched_services.items():
             if service_filter.matches_service(service):
                 for listener in listeners:
                     listener.service_stopped(service)
+        for listener in self.watcher_all_services:
+            listener.service_stopped(service)
 
 
 class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):

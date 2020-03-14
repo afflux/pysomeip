@@ -4,7 +4,17 @@ import ipaddress
 import logging
 
 import someip.config
-from someip.sd import ServiceDiscoveryProtocol as SDProto
+from someip.sd import ServiceDiscoveryProtocol as SDProto, ServiceListener
+
+LOG = logging.getLogger('monitor-sd')
+
+
+class Monitor(ServiceListener):
+    def service_offered(self, service):
+        LOG.info('offer: %s', service)
+
+    def service_stopped(self, service):
+        LOG.info('offer STOPPED: %s', service)
 
 
 async def run(local_addr, multicast_addr, port, services):
@@ -14,11 +24,15 @@ async def run(local_addr, multicast_addr, port, services):
         port=port,
     )
 
+    monitor = Monitor()
+
     if services:
         for sid in services:
-            protocol.watch_service(someip.config.Service(sid))
+            protocol.watch_service(someip.config.Service(sid), monitor)
 
         await protocol.send_find_services()
+    else:
+        protocol.watch_all_service(monitor)
 
     try:
         while True:
@@ -44,7 +58,7 @@ def setup_log(fmt='', **kwargs):
 
 
 def main():
-    setup_log('%(levelname)-8s %(name)s: %(message)s', level=logging.DEBUG)
+    setup_log('%(levelname)-8s %(name)s: %(message)s', level=logging.INFO)
 
     import argparse
 
