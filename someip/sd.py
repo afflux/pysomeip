@@ -84,9 +84,9 @@ class SOMEIPDatagramProtocol:
         host, port = socket.getnameinfo(addr, socket.NI_NUMERICHOST | socket.NI_NUMERICSERV)
         host = ipaddress.ip_address(host)
         if isinstance(host, ipaddress.IPv4Address):
-            return f'{host!s}:{port:d}'
-        elif isinstance(host, ipaddress.IPv4Address):
-            return f'[{host!s}]:{port:d}'
+            return f'{host!s}:{port:s}'
+        elif isinstance(host, ipaddress.IPv6Address):
+            return f'[{host!s}]:{port:s}'
         else:
             raise NotImplementedError(f'unknown ip address format: {addr!r} -> {host!r}')
 
@@ -634,7 +634,7 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
                 # is handled by ServiceDiscoveryProtocol
                 continue
             elif entry.sd_type == someip.header.SOMEIPSDEntryType.FindService:
-                self.log.info('received from %s:%d: %s', self.format_address(addr), entry)
+                self.log.info('received from %s: %s', self.format_address(addr), entry)
                 # XXX spec is unclear on RequestResponseDelay behavior if new Find is received
                 asyncio.create_task(
                     self._handle_findservice(entry, addr, multicast, sdhdr.flag_unicast)
