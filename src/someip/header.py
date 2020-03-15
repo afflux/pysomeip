@@ -261,7 +261,7 @@ class SOMEIPSDEntry:
 
     def assign_option_index(self, options: typing.List[SOMEIPSDOption]):
         if not self.options_resolved:
-            return
+            return  # pragma: nocover
 
         self.option_index_1, self.num_options_1 = self._assign_option(self.options_1, options)
         self.option_index_2, self.num_options_2 = self._assign_option(self.options_2, options)
