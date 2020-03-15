@@ -1,2 +1,2 @@
 include versioneer.py
-include someip/_version.py
+include src/someip/_version.py

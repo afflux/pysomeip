@@ -1,31 +1,18 @@
 #!/usr/bin/env python
+import sys
+import importlib.util
+import pathlib
 
 from setuptools import setup, find_packages
-import versioneer
 
-CLASSIFIERS = [
-    "Development Status :: 4 - Beta",
-    "Operating System :: OS Independent",
-    "Programming Language :: Python",
-]
-
-extra = {}
-extra['install_requires'] = open('requirements.txt').read().splitlines()
+module_path = pathlib.Path(__file__).with_name('versioneer.py')
+module_name = 'versioneer'
+spec = importlib.util.spec_from_file_location(module_name, module_path)
+versioneer = importlib.util.module_from_spec(spec)
+sys.modules[module_name] = versioneer
+spec.loader.exec_module(versioneer)
 
 setup(
-    name='someip',
     version=versioneer.get_version(),
     cmdclass=versioneer.get_cmdclass(),
-    author='Kjell Braden <afflux@pentabarf.de>',
-    platforms='any',
-    classifiers=CLASSIFIERS,
-    packages=find_packages(),
-    entry_points={
-        'console_scripts': [
-            'someip-monitor-offers = someip.sd:main',
-        ],
-    },
-    test_suite='someip.tests',
-    **extra
 )
-
