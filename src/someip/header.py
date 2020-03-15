@@ -211,8 +211,6 @@ class SOMEIPSDEntry:
         elif self.sd_type in (SOMEIPSDEntryType.Subscribe, SOMEIPSDEntryType.SubscribeAck):
             version = (f'{self.major_version}, eventgroup_counter={self.eventgroup_counter},'
                        f' eventgroup_id={self.eventgroup_id}')
-        else:
-            raise TypeError('unsupported sd_type received')
 
         if self.options_resolved:
             s_options_1 = ', '.join(str(o) for o in self.options_1)
@@ -271,7 +269,8 @@ class SOMEIPSDEntry:
     @property
     def service_minor_version(self) -> int:
         if self.sd_type not in (SOMEIPSDEntryType.FindService, SOMEIPSDEntryType.OfferService):
-            raise TypeError(f'SD entry is type {self.sd_type}, does not have service_minor_version')
+            raise TypeError(f'SD entry is type {self.sd_type},'
+                            ' does not have service_minor_version')
         return self.minver_or_counter
 
     @property

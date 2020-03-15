@@ -150,7 +150,7 @@ class TestHeader(unittest.TestCase):
         self.assertFalse(entry.is_stop_offer)
         self.assertFalse(entry.options_resolved)
 
-    def test_sdentry_service(self):
+    def test_sdentry_bad_type(self):
         payload = b'\x77\xAA\xBB\xCD\x88\x99\x66\x77\xEE\x20\x21\x22\x10\x11\x12\x13'
         with self.assertRaises(hdr.ParseError):
             hdr.SOMEIPSDEntry.parse(payload, 512)
@@ -273,7 +273,7 @@ class TestHeader(unittest.TestCase):
         option = hdr.IPv4EndpointOption(
             address=ipaddress.IPv4Address('1.2.254.255'),
             l4proto=hdr.L4Protocols.TCP,
-            port=1023
+            port=1023,
         )
         self._check(payload, option, hdr.SOMEIPSDOption.parse)
 
@@ -281,7 +281,7 @@ class TestHeader(unittest.TestCase):
         option = hdr.IPv4EndpointOption(
             address=ipaddress.IPv4Address('1.2.254.255'),
             l4proto=0x42,
-            port=1023
+            port=1023,
         )
         self._check(payload, option, hdr.SOMEIPSDOption.parse)
 
@@ -327,7 +327,7 @@ class TestHeader(unittest.TestCase):
             flag_unicast=False,
             flags_unknown=0xa5 & ~0x80,
             entries=[],
-            options=[]
+            options=[],
         )
         self._check(payload, sd, hdr.SOMEIPSDHeader.parse)
 
@@ -342,7 +342,7 @@ class TestHeader(unittest.TestCase):
                 instance_id=0x6677,
                 major_version=0xee,
                 ttl=0x202122,
-                minver_or_counter=0x10
+                minver_or_counter=0x10,
             ),
             hdr.SOMEIPSDEntry(
                 sd_type=hdr.SOMEIPSDEntryType.OfferService,
@@ -354,19 +354,19 @@ class TestHeader(unittest.TestCase):
                 instance_id=0x7788,
                 major_version=0x99,
                 ttl=0xaaabac,
-                minver_or_counter=0xdeadbeef
+                minver_or_counter=0xdeadbeef,
             ),
         ]
         options = [
             hdr.IPv4EndpointOption(
                 address=ipaddress.IPv4Address('1.2.3.4'),
                 l4proto=hdr.L4Protocols.UDP,
-                port=2047
+                port=2047,
             ),
             hdr.IPv4EndpointOption(
                 address=ipaddress.IPv4Address('254.253.252.251'),
                 l4proto=hdr.L4Protocols.UDP,
-                port=65535
+                port=65535,
             ),
             hdr.SOMEIPSDLoadBalancingOption(priority=0x2222, weight=0x3333),
         ]
@@ -383,7 +383,7 @@ class TestHeader(unittest.TestCase):
             flag_unicast=True,
             flags_unknown=0,
             entries=entries,
-            options=options
+            options=options,
         )
         self._check(payload, sd, hdr.SOMEIPSDHeader.parse)
 
@@ -421,7 +421,7 @@ class TestHeader(unittest.TestCase):
                 instance_id=0x6677,
                 major_version=0xee,
                 ttl=0x202122,
-                minver_or_counter=0x10
+                minver_or_counter=0x10,
             ),
             hdr.SOMEIPSDEntry(
                 sd_type=hdr.SOMEIPSDEntryType.OfferService,
@@ -433,19 +433,19 @@ class TestHeader(unittest.TestCase):
                 instance_id=0x7788,
                 major_version=0x99,
                 ttl=0xaaabac,
-                minver_or_counter=0xdeadbeef
+                minver_or_counter=0xdeadbeef,
             ),
         ]
         options = [
             hdr.IPv4EndpointOption(
                 address=ipaddress.IPv4Address('1.2.3.4'),
                 l4proto=hdr.L4Protocols.UDP,
-                port=2047
+                port=2047,
             ),
             hdr.IPv4EndpointOption(
                 address=ipaddress.IPv4Address('254.253.252.251'),
                 l4proto=hdr.L4Protocols.UDP,
-                port=65535
+                port=65535,
             ),
             hdr.SOMEIPSDLoadBalancingOption(priority=0x2222, weight=0x3333),
         ]
@@ -454,7 +454,7 @@ class TestHeader(unittest.TestCase):
             flag_unicast=True,
             flags_unknown=0,
             entries=entries,
-            options=options
+            options=options,
         )
 
         self.assertFalse(any(e.options_resolved for e in sd.entries))
@@ -511,37 +511,37 @@ class TestHeader(unittest.TestCase):
         with self.assertRaises(hdr.ParseError):
             hdr.SOMEIPSDHeader.parse(
                 header + b'\x06\x00\x00\x60\x88\x99\x66\x77\xEE\x20\x21\x22\x00\x00\x00\x10'
-                + entries
+                + entries,
             )
 
         with self.assertRaises(hdr.ParseError):
             hdr.SOMEIPSDHeader.parse(
                 header + b'\x06\x00\x00\x0f\x88\x99\x66\x77\xEE\x20\x21\x22\x00\x00\x00\x10'
-                + entries
+                + entries,
             )
 
         with self.assertRaises(hdr.ParseError):
             hdr.SOMEIPSDHeader.parse(
                 header + b'\x06\x05\x00\x10\x88\x99\x66\x77\xEE\x20\x21\x22\x00\x00\x00\x10'
-                + entries
+                + entries,
             )
 
         with self.assertRaises(hdr.ParseError):
             hdr.SOMEIPSDHeader.parse(
                 header + b'\x06\x00\x05\x0f\x88\x99\x66\x77\xEE\x20\x21\x22\x00\x00\x00\x10'
-                + entries
+                + entries,
             )
 
         with self.assertRaises(hdr.ParseError):
             hdr.SOMEIPSDHeader.parse(
                 header + b'\x06\x77\x00\x10\x88\x99\x66\x77\xEE\x20\x21\x22\x00\x00\x00\x10'
-                + entries
+                + entries,
             )
 
         with self.assertRaises(hdr.ParseError):
             hdr.SOMEIPSDHeader.parse(
                 header + b'\x06\x00\xff\x0f\x88\x99\x66\x77\xEE\x20\x21\x22\x00\x00\x00\x10'
-                + entries
+                + entries,
             )
 
 

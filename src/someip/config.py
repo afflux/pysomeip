@@ -7,6 +7,7 @@ import someip.header
 
 
 _T_ADDR = typing.Tuple[typing.Union[ipaddress.IPv4Address, ipaddress.IPv6Address], int]
+_T_SOCKNAME = typing.Union[typing.Tuple[str, int], typing.Tuple[str, int, int, int]]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -16,7 +17,7 @@ class Eventgroup:
     major_version: int
     eventgroup_id: int
 
-    sockname: typing.Tuple
+    sockname: _T_SOCKNAME
 
     protocol: someip.header.L4Protocols
 
@@ -31,7 +32,7 @@ class Eventgroup:
                                            options_1=[endpoint_option])
 
     @staticmethod
-    def _sockaddr_to_endpoint(sockname: typing.Tuple, protocol: someip.header.L4Protocols) \
+    def _sockaddr_to_endpoint(sockname: _T_SOCKNAME, protocol: someip.header.L4Protocols) \
             -> someip.header.SOMEIPSDOption:
         host, port = socket.getnameinfo(sockname,
                                         socket.NI_NUMERICHOST | socket.NI_NUMERICSERV)

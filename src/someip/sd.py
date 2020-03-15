@@ -1,6 +1,5 @@
 import asyncio
 import collections
-import functools
 import ipaddress
 import logging
 import random
@@ -253,7 +252,7 @@ class SubscriptionProtocol(_BaseSDProtocol):
 
         self.subscribeentries: typing.Set[typing.Tuple[
             someip.config.Eventgroup,
-            _T_SOCKADDR
+            _T_SOCKADDR,
         ]] = set()
 
     def subscribe_eventgroup(self, eventgroup: someip.config.Eventgroup, endpoint: _T_SOCKADDR) \
@@ -472,13 +471,13 @@ class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
         super().__init__(logger=logger, multicast_addr=multicast_addr)
         self.watched_services: typing.Dict[
                 someip.config.Service,
-                typing.Set[ServiceListener]
+                typing.Set[ServiceListener],
         ] = collections.defaultdict(set)
         self.watcher_all_services: typing.Set[ServiceListener] = set()
 
         self.found_services: typing.Dict[
             _T_SOCKADDR,
-            typing.Dict[someip.config.Service, typing.Optional[asyncio.Handle]]
+            typing.Dict[someip.config.Service, typing.Optional[asyncio.Handle]],
         ] = collections.defaultdict(dict)
 
     def sd_message_received(self, sdhdr: someip.header.SOMEIPSDHeader,
@@ -566,7 +565,7 @@ class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
     def connection_lost(self, exc: typing.Optional[Exception]) -> None:
         self.log.exception('connection lost. stopping service_timeout tasks', exc_info=exc)
 
-        for addr, services in self.found_services.items():
+        for services in self.found_services.values():
             for service, handle in services.items():
                 asyncio.get_event_loop().call_soon(self._notify_service_stopped, service)
                 if handle:
@@ -654,7 +653,7 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
                 self.log.info('received from %s: %s', self.format_address(addr), entry)
                 # XXX spec is unclear on RequestResponseDelay behavior if new Find is received
                 asyncio.create_task(
-                    self._handle_findservice(entry, addr, multicast, sdhdr.flag_unicast)
+                    self._handle_findservice(entry, addr, multicast, sdhdr.flag_unicast),
                 )
             elif entry.sd_type == someip.header.SOMEIPSDEntryType.Subscribe:
                 if multicast:
