@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import copy
 import dataclasses
 import enum
 import ipaddress
@@ -237,15 +236,15 @@ class SOMEIPSDEntry:
         if self.options_resolved:
             raise ValueError('options already resolved')
 
-        oi1 = self.option_index_1
-        oi2 = self.option_index_2
-        no1 = self.num_options_1
-        no2 = self.num_options_2
+        oi1 = typing.cast(int, self.option_index_1)
+        oi2 = typing.cast(int, self.option_index_2)
+        no1 = typing.cast(int, self.num_options_1)
+        no2 = typing.cast(int, self.num_options_2)
 
         self.option_index_1 = self.option_index_2 = self.num_options_1 = self.num_options_2 = None
 
-        self.options_1 = list(copy.deepcopy(options[oi1:oi1 + no1]))
-        self.options_2 = list(copy.deepcopy(options[oi2:oi2 + no2]))
+        self.options_1 = list(options[oi1:oi1 + no1])
+        self.options_2 = list(options[oi2:oi2 + no2])
 
     @staticmethod
     def _assign_option(entry_options, hdr_options):
@@ -264,7 +263,9 @@ class SOMEIPSDEntry:
             return  # pragma: nocover
 
         self.option_index_1, self.num_options_1 = self._assign_option(self.options_1, options)
+        self.options_1 = []
         self.option_index_2, self.num_options_2 = self._assign_option(self.options_2, options)
+        self.options_2 = []
 
     @property
     def service_minor_version(self) -> int:
@@ -440,10 +441,10 @@ class L4Protocols(enum.IntEnum):
 
 
 @dataclasses.dataclass(frozen=True)
-class AbstractIPOption(SOMEIPSDAbstractOption):
+class AbstractIPOption(SOMEIPSDAbstractOption, typing.Generic[T]):
     _format: typing.ClassVar[struct.Struct]
     _address_type: typing.ClassVar[typing.Type]
-    address: typing.Union[ipaddress.IPv4Address, ipaddress.IPv6Address]
+    address: T
     l4proto: typing.Union[L4Protocols, int]
     port: int
 
@@ -479,7 +480,7 @@ class SDEndpointOption:
     pass
 
 
-class AbstractIPv4Option(AbstractIPOption):
+class AbstractIPv4Option(AbstractIPOption[ipaddress.IPv4Address]):
     _format: typing.ClassVar[struct.Struct] = struct.Struct('!B4sBBH')
     _address_type = ipaddress.IPv4Address
 
@@ -487,7 +488,7 @@ class AbstractIPv4Option(AbstractIPOption):
         return f'{self.address}:{self.port} ({self.l4proto.name})'
 
 
-class AbstractIPv6Option(AbstractIPOption):
+class AbstractIPv6Option(AbstractIPOption[ipaddress.IPv6Address]):
     _format: typing.ClassVar[struct.Struct] = struct.Struct('!B16sBBH')
     _address_type = ipaddress.IPv6Address
 
