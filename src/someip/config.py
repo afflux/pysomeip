@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import dataclasses
 import ipaddress
 import socket
@@ -29,7 +31,7 @@ class Eventgroup:
                                            major_version=self.major_version,
                                            ttl=ttl,
                                            minver_or_counter=self.eventgroup_id,
-                                           options_1=[endpoint_option])
+                                           options_1=(endpoint_option,))
 
     @staticmethod
     def _sockaddr_to_endpoint(sockname: _T_SOCKNAME, protocol: someip.header.L4Protocols) \
@@ -43,10 +45,10 @@ class Eventgroup:
             return someip.header.IPv4EndpointOption(address=naddr, l4proto=protocol, port=nport)
         elif isinstance(naddr, ipaddress.IPv6Address):
             return someip.header.IPv6EndpointOption(address=naddr, l4proto=protocol, port=nport)
-        else:
+        else:  # pragma: nocover
             raise TypeError('unsupported IP address family')
 
-    def __str__(self) -> str:
+    def __str__(self) -> str:  # pragma: nocover
         return f'eventgroup={self.eventgroup_id:04x} service=0x{self.service_id:04x},' \
                f' instance=0x{self.instance_id:04x}, version={self.major_version}' \
                f' addr={self.sockname!r} proto={self.protocol.name}'
@@ -95,7 +97,7 @@ class Service:
             return False
         return True
 
-    def matches_service(self, other: 'Service') -> bool:
+    def matches_service(self, other: Service) -> bool:
         if self.service_id != other.service_id:
             return False
 
@@ -128,10 +130,10 @@ class Service:
                                            major_version=self.major_version,
                                            ttl=ttl,
                                            minver_or_counter=self.minor_version,
-                                           options_1=self.options_1,
-                                           options_2=self.options_2)
+                                           options_1=tuple(self.options_1),
+                                           options_2=tuple(self.options_2))
 
-    def __str__(self) -> str:
+    def __str__(self) -> str:  # pragma: nocover
         version = f'{self.major_version}.{self.minor_version}'
 
         s_options_1 = ', '.join(str(o) for o in self.options_1) if self.options_1 else ''
@@ -144,6 +146,8 @@ class Service:
     def from_offer_entry(cls, entry: someip.header.SOMEIPSDEntry) -> 'Service':
         if entry.sd_type != someip.header.SOMEIPSDEntryType.OfferService:
             raise ValueError('entry is no OfferService')
+        if not entry.options_resolved:
+            raise ValueError('entry must have resolved options')
         return cls(entry.service_id, entry.instance_id,
                    entry.major_version, entry.service_minor_version,
                    options_1=tuple(entry.options_1), options_2=tuple(entry.options_2))
