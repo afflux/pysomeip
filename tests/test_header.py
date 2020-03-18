@@ -2,6 +2,7 @@ import asyncio
 import ipaddress
 import logging
 import unittest
+from dataclasses import replace
 
 import someip.header as hdr
 
@@ -335,8 +336,8 @@ class TestHeader(unittest.TestCase):
             flag_reboot=True,
             flag_unicast=False,
             flags_unknown=0xa5 & ~0x80,
-            entries=[],
-            options=[],
+            entries=(),
+            options=(),
         )
         self._check(payload, sd, hdr.SOMEIPSDHeader.parse)
 
@@ -391,8 +392,8 @@ class TestHeader(unittest.TestCase):
             flag_reboot=False,
             flag_unicast=True,
             flags_unknown=0,
-            entries=entries,
-            options=options,
+            entries=tuple(entries),
+            options=tuple(options),
         )
         self._check(payload, sd, hdr.SOMEIPSDHeader.parse)
 
@@ -468,31 +469,33 @@ class TestHeader(unittest.TestCase):
 
         self.assertFalse(any(e.options_resolved for e in sd.entries))
 
-        sd.resolve_options()
-        self.assertTrue(all(e.options_resolved for e in sd.entries))
+        sd_resolved = sd.resolve_options()
+        self.assertTrue(all(e.options_resolved for e in sd_resolved.entries))
         with self.assertRaises(ValueError):
-            sd.resolve_options()
+            sd_resolved.resolve_options()
         with self.assertRaises(ValueError):
-            sd.build()
+            sd_resolved.build()
 
-        self.assertEqual(entries[0].options_1, options[:2])
-        self.assertEqual(entries[0].options_2, options[:1])
-        self.assertEqual(entries[1].options_1, options[1:3])
-        self.assertEqual(entries[1].options_2, options[2:3])
-        self.assertIsNone(entries[0].option_index_1)
-        self.assertIsNone(entries[0].option_index_2)
-        self.assertIsNone(entries[1].option_index_1)
-        self.assertIsNone(entries[1].option_index_2)
-        self.assertIsNone(entries[0].num_options_1)
-        self.assertIsNone(entries[0].num_options_2)
-        self.assertIsNone(entries[1].num_options_1)
-        self.assertIsNone(entries[1].num_options_2)
+        self.assertEqual(sd_resolved.entries[0].options_1, options[:2])
+        self.assertEqual(sd_resolved.entries[0].options_2, options[:1])
+        self.assertEqual(sd_resolved.entries[1].options_1, options[1:3])
+        self.assertEqual(sd_resolved.entries[1].options_2, options[2:3])
+        self.assertIsNone(sd_resolved.entries[0].option_index_1)
+        self.assertIsNone(sd_resolved.entries[0].option_index_2)
+        self.assertIsNone(sd_resolved.entries[1].option_index_1)
+        self.assertIsNone(sd_resolved.entries[1].option_index_2)
+        self.assertIsNone(sd_resolved.entries[0].num_options_1)
+        self.assertIsNone(sd_resolved.entries[0].num_options_2)
+        self.assertIsNone(sd_resolved.entries[1].num_options_1)
+        self.assertIsNone(sd_resolved.entries[1].num_options_2)
 
-        self.assertNotIn(newopt, options)
-        entries[1].options_1 = [options[0], newopt]
-        entries[0].options_2 = []
+        self.assertNotIn(newopt, sd_resolved.options)
 
-        newsd = sd.assign_option_indexes()
+        newsd = replace(sd_resolved,
+                        entries=(
+                            replace(sd_resolved.entries[0], options_2=[]),
+                            replace(sd_resolved.entries[1], options_1=[options[0], newopt]),
+                        )).assign_option_indexes()
         self.assertIn(newopt, newsd.options)
 
         self.assertFalse(newsd.entries[0].options_1)

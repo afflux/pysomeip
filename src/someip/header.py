@@ -9,7 +9,7 @@ import socket
 import typing
 
 
-T = typing.TypeVar('T')
+T = typing.TypeVar('T', ipaddress.IPv4Address, ipaddress.IPv6Address)
 
 
 SD_SERVICE = 0xffff
@@ -58,7 +58,7 @@ def unpack(fmt, buf):
     return fmt.unpack(buf[:fmt.size]), buf[fmt.size:]
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class SOMEIPHeader:
     __format: typing.ClassVar[struct.Struct] = struct.Struct('!HHIHHBBBB')
     service_id: int
@@ -188,7 +188,7 @@ def _find(haystack, needle):
     return None
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class SOMEIPSDEntry:
     __format: typing.ClassVar[struct.Struct] = struct.Struct('!BBBBHHBBHI')
     sd_type: SOMEIPSDEntryType
@@ -198,8 +198,8 @@ class SOMEIPSDEntry:
     ttl: int
     minver_or_counter: int
 
-    options_1: typing.List[SOMEIPSDOption] = dataclasses.field(default_factory=list)
-    options_2: typing.List[SOMEIPSDOption] = dataclasses.field(default_factory=list)
+    options_1: typing.Tuple[SOMEIPSDOption, ...] = dataclasses.field(default_factory=tuple)
+    options_2: typing.Tuple[SOMEIPSDOption, ...] = dataclasses.field(default_factory=tuple)
     option_index_1: typing.Optional[int] = dataclasses.field(default=None)
     option_index_2: typing.Optional[int] = dataclasses.field(default=None)
     num_options_1: typing.Optional[int] = dataclasses.field(default=None)
@@ -233,7 +233,7 @@ class SOMEIPSDEntry:
         return self.option_index_1 is None or self.option_index_2 is None \
                 or self.num_options_1 is None or self.num_options_2 is None
 
-    def resolve_options(self, options: typing.Sequence[SOMEIPSDOption]):
+    def resolve_options(self, options: typing.Tuple[SOMEIPSDOption, ...]) -> SOMEIPSDEntry:
         if self.options_resolved:
             raise ValueError('options already resolved')
 
@@ -242,13 +242,14 @@ class SOMEIPSDEntry:
         no1 = typing.cast(int, self.num_options_1)
         no2 = typing.cast(int, self.num_options_2)
 
-        self.option_index_1 = self.option_index_2 = self.num_options_1 = self.num_options_2 = None
-
-        self.options_1 = list(options[oi1:oi1 + no1])
-        self.options_2 = list(options[oi2:oi2 + no2])
+        return dataclasses.replace(self,
+                                   options_1=options[oi1:oi1 + no1],
+                                   options_2=options[oi2:oi2 + no2],
+                                   option_index_1=None, option_index_2=None,
+                                   num_options_1=None, num_options_2=None)
 
     @staticmethod
-    def _assign_option(entry_options, hdr_options):
+    def _assign_option(entry_options, hdr_options) -> typing.Tuple[int, int]:
         if not entry_options:
             return (0, 0)
 
@@ -259,7 +260,7 @@ class SOMEIPSDEntry:
             hdr_options.extend(entry_options)
         return oi, no
 
-    def assign_option_index(self, options: typing.List[SOMEIPSDOption]):
+    def assign_option_index(self, options: typing.List[SOMEIPSDOption]) -> SOMEIPSDEntry:
         if not self.options_resolved:
             return dataclasses.replace(self)  # pragma: nocover
 
@@ -267,7 +268,7 @@ class SOMEIPSDEntry:
         oi2, no2 = self._assign_option(self.options_2, options)
         return dataclasses.replace(self, option_index_1=oi1, option_index_2=oi2,
                                    num_options_1=no1, num_options_2=no2,
-                                   options_1=[], options_2=[])
+                                   options_1=(), options_2=())
 
     @property
     def service_minor_version(self) -> int:
@@ -489,7 +490,10 @@ class AbstractIPv4Option(AbstractIPOption[ipaddress.IPv4Address]):
     _address_type = ipaddress.IPv4Address
 
     def __str__(self) -> str:  # pragma: nocover
-        return f'{self.address}:{self.port} ({self.l4proto.name})'
+        if isinstance(self.l4proto, L4Protocols):
+            return f'{self.address}:{self.port} ({self.l4proto.name})'
+        else:
+            return f'{self.address}:{self.port} (protocol={self.l4proto:#x})'
 
 
 class AbstractIPv6Option(AbstractIPOption[ipaddress.IPv6Address]):
@@ -497,7 +501,10 @@ class AbstractIPv6Option(AbstractIPOption[ipaddress.IPv6Address]):
     _address_type = ipaddress.IPv6Address
 
     def __str__(self) -> str:  # pragma: nocover
-        return f'[{self.address}]:{self.port} ({self.l4proto.name})'
+        if isinstance(self.l4proto, L4Protocols):
+            return f'{self.address}:{self.port} ({self.l4proto.name})'
+        else:
+            return f'{self.address}:{self.port} (protocol={self.l4proto:#x})'
 
 
 @SOMEIPSDOption.register
@@ -532,22 +539,22 @@ class IPv6SDEndpointOption(AbstractIPv6Option, SDEndpointOption):
     type_: typing.ClassVar[int] = 0x26
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class SOMEIPSDHeader:
-    entries: typing.Sequence[SOMEIPSDEntry]
-    options: typing.Sequence[SOMEIPSDOption] = dataclasses.field(default_factory=list)
+    entries: typing.Tuple[SOMEIPSDEntry, ...]
+    options: typing.Tuple[SOMEIPSDOption, ...] = dataclasses.field(default_factory=tuple)
     flag_reboot: bool = dataclasses.field(default=False)
     flag_unicast: bool = dataclasses.field(default=True)
     flags_unknown: int = dataclasses.field(default=0)
 
     def resolve_options(self):
-        for e in self.entries:
-            e.resolve_options(self.options)
+        entries = [e.resolve_options(self.options) for e in self.entries]
+        return dataclasses.replace(self, entries=tuple(entries))
 
     def assign_option_indexes(self):
         options = list(self.options)
         entries = [e.assign_option_index(options) for e in self.entries]
-        return dataclasses.replace(self, entries=entries, options=options)
+        return dataclasses.replace(self, entries=tuple(entries), options=tuple(options))
 
     def __str__(self):  # pragma: nocover
         entries = '\n'.join(str(e) for e in self.entries)
@@ -591,7 +598,7 @@ class SOMEIPSDHeader:
         flags &= ~0x40
 
         parsed = cls(flag_reboot=flag_reboot, flag_unicast=flag_unicast, flags_unknown=flags,
-                     entries=entries, options=options)
+                     entries=tuple(entries), options=tuple(options))
         return parsed, rest_buf
 
     def build(self) -> bytes:

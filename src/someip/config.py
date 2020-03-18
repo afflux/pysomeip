@@ -62,9 +62,9 @@ class Service:
     minor_version: int = dataclasses.field(default=0xffffff)
 
     options_1: typing.Optional[typing.Sequence[someip.header.SOMEIPSDOption]] \
-        = dataclasses.field(default_factory=tuple)
+        = dataclasses.field(default_factory=tuple, compare=False)
     options_2: typing.Optional[typing.Sequence[someip.header.SOMEIPSDOption]] \
-        = dataclasses.field(default_factory=tuple)
+        = dataclasses.field(default_factory=tuple, compare=False)
 
     def matches_offer(self, entry: someip.header.SOMEIPSDEntry) -> bool:
         if entry.sd_type != someip.header.SOMEIPSDEntryType.OfferService:

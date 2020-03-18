@@ -150,11 +150,11 @@ class TestConfig(unittest.TestCase):
         self.assertTrue(replace(srv, minor_version=0xffffff).matches_offer(offer))
 
         # ttl=0 is StopOffer, should still match
-        offer.ttl = 0
-        self.assertTrue(srv.matches_offer(offer))
+        stop_offer = replace(offer, ttl=0)
+        self.assertTrue(srv.matches_offer(stop_offer))
 
         with self.assertRaises(ValueError):
-            srv.matches_offer(replace(offer, sd_type=hdr.SOMEIPSDEntryType.FindService))
+            srv.matches_offer(replace(stop_offer, sd_type=hdr.SOMEIPSDEntryType.FindService))
 
     def test_service_match_find(self):
         host = ipaddress.ip_address('2001:db8::1234:5678:dead:beef')

@@ -175,8 +175,8 @@ class _BaseSDProtocol(SOMEIPDatagramProtocol):
 
         # FIXME this will drop the SD Endpoint options, since they are not referenced by entries
         # see 4.2.1 TR_SOMEIP_00548
-        sdhdr.resolve_options()
-        self.sd_message_received(sdhdr, addr, multicast)
+        sdhdr_resolved = sdhdr.resolve_options()
+        self.sd_message_received(sdhdr_resolved, addr, multicast)
 
         if rest:
             self.log.warning('unparsed data after SD from %s: %r', self.format_address(addr), rest)
