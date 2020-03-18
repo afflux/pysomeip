@@ -68,6 +68,11 @@ class TestHeader(unittest.TestCase):
                                    payload=b'\xaa\x55')
         self._check(payload, message, hdr.SOMEIPHeader.parse, extra=b'\1\2\3\4')
 
+    def test_someip_short(self):
+        payload = b'\xde\xad\xbe\xef\x00\x00\x00\x08\xcc\xcc\xdd\xdd\x01\x02\x40'
+        with self.assertRaises(hdr.ParseError):
+            hdr.SOMEIPHeader.parse(payload)
+
     def test_someip_bad_version(self):
         payload = b'\xde\xad\xbe\xef\x00\x00\x00\x08\xcc\xcc\xdd\xdd\x00\x02\x40\x04'
         with self.assertRaises(hdr.ParseError):
@@ -93,46 +98,50 @@ class TestHeader(unittest.TestCase):
             hdr.SOMEIPHeader.parse(payload)
 
     def test_someip_stream_async(self):
-        loop = asyncio.get_event_loop()
-        bytes_reader = asyncio.StreamReader(loop=loop)
-        someip_reader = hdr.SOMEIPReader(bytes_reader)
+        loop = asyncio.new_event_loop()
+        try:
+            bytes_reader = asyncio.StreamReader(loop=loop)
+            someip_reader = hdr.SOMEIPReader(bytes_reader)
 
-        async def consume(reader):
-            return await reader.read()
+            async def consume(reader):
+                return await reader.read()
 
-        bytes_reader.feed_data(b'\xde\xad\xbe\xef')
-        bytes_reader.feed_data(b'\x00\x00')
-        bytes_reader.feed_data(b'\x00\x08\xcc\xcc')
-        bytes_reader.feed_data(b'\xdd\xdd\x01\x02\x40\x04')
-        bytes_reader.feed_data(b'\xde\xad\xbe\xef\x00\x00\x00\x0a\xcc\xcc\xdd\xdd\x01\x02\x40\x04')
+            bytes_reader.feed_data(b'\xde\xad\xbe\xef')
+            bytes_reader.feed_data(b'\x00\x00')
+            bytes_reader.feed_data(b'\x00\x08\xcc\xcc')
+            bytes_reader.feed_data(b'\xdd\xdd\x01\x02\x40\x04')
+            bytes_reader.feed_data(b'\xde\xad\xbe\xef\x00\x00\x00\x0a'
+                                   b'\xcc\xcc\xdd\xdd\x01\x02\x40\x04')
 
-        parsed = loop.run_until_complete(consume(someip_reader))
+            parsed = loop.run_until_complete(consume(someip_reader))
 
-        message = hdr.SOMEIPHeader(service_id=0xdead,
-                                   method_id=0xbeef,
-                                   client_id=0xcccc,
-                                   session_id=0xdddd,
-                                   protocol_version=1,
-                                   interface_version=2,
-                                   message_type=hdr.SOMEIPMessageType.REQUEST_ACK,
-                                   return_code=hdr.SOMEIPReturnCode.E_NOT_READY)
-        self.assertEqual(parsed, message)
+            message = hdr.SOMEIPHeader(service_id=0xdead,
+                                       method_id=0xbeef,
+                                       client_id=0xcccc,
+                                       session_id=0xdddd,
+                                       protocol_version=1,
+                                       interface_version=2,
+                                       message_type=hdr.SOMEIPMessageType.REQUEST_ACK,
+                                       return_code=hdr.SOMEIPReturnCode.E_NOT_READY)
+            self.assertEqual(parsed, message)
 
-        bytes_reader.feed_data(b'\xaa\x55')
-        bytes_reader.feed_eof()
+            bytes_reader.feed_data(b'\xaa\x55')
+            bytes_reader.feed_eof()
 
-        parsed = loop.run_until_complete(consume(someip_reader))
-        message = hdr.SOMEIPHeader(service_id=0xdead,
-                                   method_id=0xbeef,
-                                   client_id=0xcccc,
-                                   session_id=0xdddd,
-                                   protocol_version=1,
-                                   interface_version=2,
-                                   message_type=hdr.SOMEIPMessageType.REQUEST_ACK,
-                                   return_code=hdr.SOMEIPReturnCode.E_NOT_READY,
-                                   payload=b'\xaa\x55')
-        self.assertEqual(parsed, message)
-        self.assertTrue(someip_reader.at_eof())
+            parsed = loop.run_until_complete(consume(someip_reader))
+            message = hdr.SOMEIPHeader(service_id=0xdead,
+                                       method_id=0xbeef,
+                                       client_id=0xcccc,
+                                       session_id=0xdddd,
+                                       protocol_version=1,
+                                       interface_version=2,
+                                       message_type=hdr.SOMEIPMessageType.REQUEST_ACK,
+                                       return_code=hdr.SOMEIPReturnCode.E_NOT_READY,
+                                       payload=b'\xaa\x55')
+            self.assertEqual(parsed, message)
+            self.assertTrue(someip_reader.at_eof())
+        finally:
+            loop.close()
 
     def test_sdentry_service(self):
         payload = b'\x00\xAA\xBB\xCD\x88\x99\x66\x77\xEE\x20\x21\x22\x10\x11\x12\x13'
@@ -249,11 +258,11 @@ class TestHeader(unittest.TestCase):
     def test_sdoption_bad_length(self):
         payload = b'\x00\x04\xFFABC'
         with self.assertRaises(hdr.ParseError):
-            hdr.SOMEIPHeader.parse(payload)
+            hdr.SOMEIPSDOption.parse(payload)
 
         payload = b'\xff\xff\xFFABC'
         with self.assertRaises(hdr.ParseError):
-            hdr.SOMEIPHeader.parse(payload)
+            hdr.SOMEIPSDOption.parse(payload)
 
     def test_sdoption_unknown(self):
         payload = b'\x00\x03\xFFABC'

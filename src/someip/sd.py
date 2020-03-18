@@ -12,12 +12,14 @@ import netifaces
 
 import someip.header
 import someip.config
+from someip.config import _T_SOCKNAME as _T_SOCKADDR
 from someip.utils import log_exceptions
 
 LOG = logging.getLogger('someip.sd')
 _T_IPADDR = typing.Union[ipaddress.IPv4Address, ipaddress.IPv6Address]
-_T_SOCKADDR = typing.Tuple
-_T_OPT_SOCKADDR = typing.Optional[typing.Tuple]
+_T_OPT_SOCKADDR = typing.Optional[_T_SOCKADDR]
+
+TTL_FOREVER = 0xffffff
 
 
 def _addr_to_ifindex(addr: _T_IPADDR) -> typing.Optional[int]:
@@ -155,6 +157,8 @@ class _BaseSDProtocol(SOMEIPDatagramProtocol):
                          addr: _T_SOCKADDR, multicast: bool) -> None:
         if someip_message.service_id != someip.header.SD_SERVICE \
                 or someip_message.method_id != someip.header.SD_METHOD \
+                or someip_message.interface_version != someip.header.SD_INTERFACE_VERSION \
+                or someip_message.return_code != someip.header.SOMEIPReturnCode.E_OK \
                 or someip_message.message_type != someip.header.SOMEIPMessageType.NOTIFICATION:
             self.log.error('SD protocol received non-SD message: %s', someip_message)
             return
@@ -242,8 +246,8 @@ class SubscriptionProtocol(_BaseSDProtocol):
 
     def __init__(self, ttl=5):
         super().__init__(logger='someip.subscribe')
-        if ttl == 0 or ttl == 0xffff:
-            raise ValueError('ttl may not be 0 or 0xffff. set to None for "forever"')
+        if ttl == 0 or ttl == TTL_FOREVER:
+            raise ValueError('ttl may not be 0 or 0xffffff. set to None for "forever"')
         self.ttl = ttl
         self.ttl_offset = 2
 
@@ -293,7 +297,7 @@ class SubscriptionProtocol(_BaseSDProtocol):
 
     def _send_start_subscribe(self, remote: _T_SOCKADDR,
                               entries: typing.Sequence[someip.config.Eventgroup]) -> None:
-        self._send_subscribe(0xffffff if self.ttl is None else self.ttl, remote, entries)
+        self._send_subscribe(TTL_FOREVER if self.ttl is None else self.ttl, remote, entries)
 
     def _send_subscribe(self, ttl: int, remote: _T_SOCKADDR,
                         entries: typing.Sequence[someip.config.Eventgroup]) -> None:

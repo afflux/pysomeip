@@ -14,6 +14,7 @@ T = typing.TypeVar('T')
 
 SD_SERVICE = 0xffff
 SD_METHOD = 0x8100
+SD_INTERFACE_VERSION = 1
 
 
 class ParseError(RuntimeError):
@@ -340,6 +341,8 @@ class SOMEIPSDOption:
     @classmethod
     def parse(cls, buf: bytes) -> typing.Tuple[SOMEIPSDOption, bytes]:
         (len_b, type_b), buf_rest = unpack(cls.__format, buf)
+        if len(buf_rest) < len_b:
+            raise ParseError(f'option data too short, expected {len_b}, got {buf_rest!r}')
         opt_b, buf_rest = buf_rest[:len_b], buf_rest[len_b:]
 
         opt_cls = cls.options.get(type_b)
@@ -533,7 +536,7 @@ class IPv6SDEndpointOption(AbstractIPv6Option, SDEndpointOption):
 class SOMEIPSDHeader:
     entries: typing.Sequence[SOMEIPSDEntry]
     options: typing.Sequence[SOMEIPSDOption] = dataclasses.field(default_factory=list)
-    flag_reboot: bool = dataclasses.field(default=True)
+    flag_reboot: bool = dataclasses.field(default=False)
     flag_unicast: bool = dataclasses.field(default=True)
     flags_unknown: int = dataclasses.field(default=0)
 
