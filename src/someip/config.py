@@ -59,7 +59,7 @@ class Service:
     service_id: int
     instance_id: int = dataclasses.field(default=0xffff)
     major_version: int = dataclasses.field(default=0xff)
-    minor_version: int = dataclasses.field(default=0xffffff)
+    minor_version: int = dataclasses.field(default=0xffffffff)
 
     options_1: typing.Tuple[someip.header.SOMEIPSDOption, ...] \
         = dataclasses.field(default_factory=tuple, compare=False)
@@ -77,7 +77,7 @@ class Service:
             return False
         if self.major_version != 0xff and self.major_version != entry.major_version:
             return False
-        if self.minor_version != 0xffffff and self.minor_version != entry.service_minor_version:
+        if self.minor_version != 0xffffffff and self.minor_version != entry.service_minor_version:
             return False
         return True
 
@@ -92,7 +92,7 @@ class Service:
             return False
         if entry.major_version != 0xff and self.major_version != entry.major_version:
             return False
-        if entry.service_minor_version != 0xffffff \
+        if entry.service_minor_version != 0xffffffff \
                 and self.minor_version != entry.service_minor_version:
             return False
         return True
@@ -109,7 +109,7 @@ class Service:
                 and self.major_version != other.major_version:
             return False
 
-        if self.minor_version != 0xffffff and other.minor_version != 0xffffff \
+        if self.minor_version != 0xffffffff and other.minor_version != 0xffffffff \
                 and self.minor_version != other.minor_version:
             return False
 

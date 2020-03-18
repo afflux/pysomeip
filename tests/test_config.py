@@ -147,7 +147,7 @@ class TestConfig(unittest.TestCase):
         self.assertFalse(replace(srv, major_version=0xbb).matches_offer(offer))
         self.assertTrue(replace(srv, major_version=0xff).matches_offer(offer))
         self.assertFalse(replace(srv, minor_version=0xbbbbbb).matches_offer(offer))
-        self.assertTrue(replace(srv, minor_version=0xffffff).matches_offer(offer))
+        self.assertTrue(replace(srv, minor_version=0xffffffff).matches_offer(offer))
 
         # ttl=0 is StopOffer, should still match
         stop_offer = replace(offer, ttl=0)
@@ -181,7 +181,7 @@ class TestConfig(unittest.TestCase):
         self.assertFalse(srv.matches_find(replace(find, major_version=0x0b)))
         self.assertTrue(srv.matches_find(replace(find, major_version=0xff)))
         self.assertFalse(srv.matches_find(replace(find, minver_or_counter=0x0b0b0b)))
-        self.assertTrue(srv.matches_find(replace(find, minver_or_counter=0xffffff)))
+        self.assertTrue(srv.matches_find(replace(find, minver_or_counter=0xffffffff)))
 
         with self.assertRaises(ValueError):
             srv.matches_find(replace(find, sd_type=hdr.SOMEIPSDEntryType.OfferService))
@@ -210,7 +210,7 @@ class TestConfig(unittest.TestCase):
         self.assertFalse(srv.matches_service(replace(other, major_version=0x0b)))
         self.assertTrue(srv.matches_service(replace(other, major_version=0xff)))
         self.assertFalse(srv.matches_service(replace(other, minor_version=0x0b0b0b)))
-        self.assertTrue(srv.matches_service(replace(other, minor_version=0xffffff)))
+        self.assertTrue(srv.matches_service(replace(other, minor_version=0xffffffff)))
 
 
 if __name__ == '__main__':
