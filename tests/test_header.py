@@ -483,21 +483,21 @@ class TestHeader(unittest.TestCase):
         entries[1].options_1 = [options[0], newopt]
         entries[0].options_2 = []
 
-        sd.assign_option_indexes()
-        self.assertIn(newopt, options)
+        newsd = sd.assign_option_indexes()
+        self.assertIn(newopt, newsd.options)
 
-        self.assertFalse(entries[0].options_1)
-        self.assertFalse(entries[0].options_2)
-        self.assertFalse(entries[1].options_1)
-        self.assertFalse(entries[1].options_2)
-        self.assertEqual(entries[0].option_index_1, 0)
-        self.assertEqual(entries[0].option_index_2, 0)
-        self.assertEqual(entries[0].num_options_1, 2)
-        self.assertEqual(entries[0].num_options_2, 0)
-        self.assertEqual(entries[1].option_index_1, 3)
-        self.assertEqual(entries[1].option_index_2, 2)
-        self.assertEqual(entries[1].num_options_1, 2)
-        self.assertEqual(entries[1].num_options_2, 1)
+        self.assertFalse(newsd.entries[0].options_1)
+        self.assertFalse(newsd.entries[0].options_2)
+        self.assertFalse(newsd.entries[1].options_1)
+        self.assertFalse(newsd.entries[1].options_2)
+        self.assertEqual(newsd.entries[0].option_index_1, 0)
+        self.assertEqual(newsd.entries[0].option_index_2, 0)
+        self.assertEqual(newsd.entries[0].num_options_1, 2)
+        self.assertEqual(newsd.entries[0].num_options_2, 0)
+        self.assertEqual(newsd.entries[1].option_index_1, 3)
+        self.assertEqual(newsd.entries[1].option_index_2, 2)
+        self.assertEqual(newsd.entries[1].num_options_1, 2)
+        self.assertEqual(newsd.entries[1].num_options_2, 1)
 
     def test_sd_bad_option_indexes(self):
         header = b'\x00\x00\x00\x00\x00\x00\x00\x10'

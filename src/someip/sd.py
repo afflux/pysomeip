@@ -308,9 +308,9 @@ class SubscriptionProtocol(_BaseSDProtocol):
             flag_unicast=True,
             entries=[e.create_subscribe_entry(ttl=ttl) for e in entries],
         )
-        sdhdr.assign_option_indexes()
+        sdhdr_assigned = sdhdr.assign_option_indexes()
 
-        self.send_sd(sdhdr, remote=remote)
+        self.send_sd(sdhdr_assigned, remote=remote)
 
     def start(self, loop=None):
         if self.task is not None or self.alive:
@@ -535,8 +535,8 @@ class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
                 flag_unicast=True,
                 entries=find_entries,
             )
-            sdhdr.assign_option_indexes()
-            self.send_sd(sdhdr)
+            sdhdr_assigned = sdhdr.assign_option_indexes()
+            self.send_sd(sdhdr_assigned)
 
             await asyncio.sleep((2**i) * self.REPETITIONS_BASE_DELAY)
 
@@ -755,10 +755,10 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
             flag_unicast=True,
             entries=entries,
         )
-        sdhdr.assign_option_indexes()
+        sdhdr_assigned = sdhdr.assign_option_indexes()
         if not remote:
             self._last_multicast_offer = asyncio.get_event_loop().time()
-        self.send_sd(sdhdr, remote=remote)
+        self.send_sd(sdhdr_assigned, remote=remote)
 
     def reboot_detected(self, addr: _T_SOCKADDR) -> None:
         # TODO remove Eventgroup subscriptions for endpoint

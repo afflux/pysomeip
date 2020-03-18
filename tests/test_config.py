@@ -93,10 +93,10 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(cfg.Service.from_offer_entry(offer), srv)
 
         sd_hdr = hdr.SOMEIPSDHeader(entries=[offer])
-        sd_hdr.assign_option_indexes()
+        sd_hdr_assigned = sd_hdr.assign_option_indexes()
 
         with self.assertRaises(ValueError):
-            cfg.Service.from_offer_entry(offer)
+            cfg.Service.from_offer_entry(sd_hdr_assigned.entries[0])
 
         with self.assertRaises(ValueError):
             cfg.Service.from_offer_entry(hdr.SOMEIPSDEntry(

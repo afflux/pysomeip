@@ -260,12 +260,13 @@ class SOMEIPSDEntry:
 
     def assign_option_index(self, options: typing.List[SOMEIPSDOption]):
         if not self.options_resolved:
-            return  # pragma: nocover
+            return dataclasses.replace(self)  # pragma: nocover
 
-        self.option_index_1, self.num_options_1 = self._assign_option(self.options_1, options)
-        self.options_1 = []
-        self.option_index_2, self.num_options_2 = self._assign_option(self.options_2, options)
-        self.options_2 = []
+        oi1, no1 = self._assign_option(self.options_1, options)
+        oi2, no2 = self._assign_option(self.options_2, options)
+        return dataclasses.replace(self, option_index_1=oi1, option_index_2=oi2,
+                                   num_options_1=no1, num_options_2=no2,
+                                   options_1=[], options_2=[])
 
     @property
     def service_minor_version(self) -> int:
@@ -541,8 +542,9 @@ class SOMEIPSDHeader:
             e.resolve_options(self.options)
 
     def assign_option_indexes(self):
-        for e in self.entries:
-            e.assign_option_index(self.options)
+        options = list(self.options)
+        entries = [e.assign_option_index(options) for e in self.entries]
+        return dataclasses.replace(self, entries=entries, options=options)
 
     def __str__(self):  # pragma: nocover
         entries = '\n'.join(str(e) for e in self.entries)
