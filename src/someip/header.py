@@ -216,8 +216,12 @@ class SOMEIPSDEntry:
             s_options_1 = ', '.join(str(o) for o in self.options_1)
             s_options_2 = ', '.join(str(o) for o in self.options_2)
         else:
-            s_options_1 = repr(range(self.option_index_1, self.option_index_1+self.num_options_1))
-            s_options_2 = repr(range(self.option_index_2, self.option_index_2+self.num_options_2))
+            oi1 = typing.cast(int, self.option_index_1)
+            oi2 = typing.cast(int, self.option_index_2)
+            no1 = typing.cast(int, self.num_options_1)
+            no2 = typing.cast(int, self.num_options_2)
+            s_options_1 = repr(range(oi1, oi1+no1))
+            s_options_2 = repr(range(oi2, oi2+no2))
 
         return f'type={self.sd_type.name}, service=0x{self.service_id:04x},' \
                f' instance=0x{self.instance_id:04x}, version={version}, ttl={self.ttl}, ' \
@@ -322,8 +326,12 @@ class SOMEIPSDEntry:
     def build(self) -> bytes:
         if self.options_resolved:
             raise ValueError('option indexes must be assigned before building')
-        return self.__format.pack(self.sd_type.value, self.option_index_1, self.option_index_2,
-                                  (self.num_options_1 << 4) | self.num_options_2, self.service_id,
+        oi1 = typing.cast(int, self.option_index_1)
+        oi2 = typing.cast(int, self.option_index_2)
+        no1 = typing.cast(int, self.num_options_1)
+        no2 = typing.cast(int, self.num_options_2)
+        return self.__format.pack(self.sd_type.value, oi1, oi2,
+                                  (no1 << 4) | no2, self.service_id,
                                   self.instance_id, self.major_version,
                                   self.ttl >> 16, self.ttl & 0xffff,
                                   self.minver_or_counter)
@@ -448,13 +456,13 @@ class L4Protocols(enum.IntEnum):
 @dataclasses.dataclass(frozen=True)
 class AbstractIPOption(SOMEIPSDAbstractOption, typing.Generic[T]):
     _format: typing.ClassVar[struct.Struct]
-    _address_type: typing.ClassVar[typing.Type]
+    _address_type: typing.ClassVar[typing.Type[T]]
     address: T
     l4proto: typing.Union[L4Protocols, int]
     port: int
 
     @classmethod
-    def parse_option(cls, buf: bytes) -> AbstractIPOption:
+    def parse_option(cls, buf: bytes) -> AbstractIPOption[T]:
         if len(buf) != cls._format.size:
             raise ParseError(f'{cls.__name__} with wrong payload length {len(buf)} != 9')
 

@@ -92,7 +92,7 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(srv.create_offer_entry(), offer)
         self.assertEqual(cfg.Service.from_offer_entry(offer), srv)
 
-        sd_hdr = hdr.SOMEIPSDHeader(entries=[offer])
+        sd_hdr = hdr.SOMEIPSDHeader(entries=(offer,))
         sd_hdr_assigned = sd_hdr.assign_option_indexes()
 
         with self.assertRaises(ValueError):
@@ -165,7 +165,7 @@ class TestConfig(unittest.TestCase):
         srv = cfg.Service(
             service_id=0x1111, instance_id=0x2222,
             major_version=0x33, minor_version=0x333333,
-            options_1=[ep],
+            options_1=(ep,),
         )
 
         find = hdr.SOMEIPSDEntry(
@@ -195,7 +195,7 @@ class TestConfig(unittest.TestCase):
         srv = cfg.Service(
             service_id=0x1111, instance_id=0x2222,
             major_version=0x33, minor_version=0x333333,
-            options_1=[ep],
+            options_1=(ep,),
         )
 
         other = cfg.Service(

@@ -61,9 +61,9 @@ class Service:
     major_version: int = dataclasses.field(default=0xff)
     minor_version: int = dataclasses.field(default=0xffffff)
 
-    options_1: typing.Optional[typing.Sequence[someip.header.SOMEIPSDOption]] \
+    options_1: typing.Tuple[someip.header.SOMEIPSDOption, ...] \
         = dataclasses.field(default_factory=tuple, compare=False)
-    options_2: typing.Optional[typing.Sequence[someip.header.SOMEIPSDOption]] \
+    options_2: typing.Tuple[someip.header.SOMEIPSDOption, ...] \
         = dataclasses.field(default_factory=tuple, compare=False)
 
     def matches_offer(self, entry: someip.header.SOMEIPSDEntry) -> bool:

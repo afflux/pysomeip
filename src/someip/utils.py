@@ -45,5 +45,5 @@ async def getfirstaddrinfo(host, port, family=0, type=0, proto=0, sock=None, fla
         loop = asyncio.get_event_loop()
     result = await loop.getaddrinfo(host, port, family=family, type=type, proto=proto, flags=flags)
     if not result:
-        raise socket.gaierror(f'no address info found for {host}:{port}')
+        raise socket.gaierror(socket.EAI_NODATA, f'no address info found for {host}:{port}')
     return result[0]
