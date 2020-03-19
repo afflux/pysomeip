@@ -1,5 +1,6 @@
 import asyncio
 import ipaddress
+import itertools
 import logging
 import unittest
 import unittest.mock
@@ -39,8 +40,8 @@ def pack_sd(entries, reboot=True, unicast=True, session_id=1):
 
 
 class TestSD(unittest.IsolatedAsyncioTestCase):
-    multi_addr = ('::1', 30490, 0, 0)
-    fake_addr = ('::2', 30490, 0, 0)
+    multi_addr = ('2001:db8::1', 30490, 0, 0)
+    fake_addr = ('2001:db8::2', 30490, 0, 0)
 
     async def _test_endpoint(self, family, host):
         sock = None
@@ -97,6 +98,39 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
 
     async def test_endpoint_v4(self):
         await self._test_endpoint(socket.AF_INET, '127.0.0.1')
+
+    async def test_send_session_id(self):
+        entry = cfg.Service(service_id=0x1234).create_find_entry()
+
+        prot = sd.SOMEIPDatagramProtocol()
+        _mock = prot.transport = unittest.mock.Mock()
+
+        # session_id wraps to 1 instead of 0
+        r = itertools.chain(
+            range(1, 0x10000),
+            range(0x100001, 0x20000),
+            range(0x200001, 0x20020),
+        )
+
+        for i in r:
+            prot.send_sd([entry], self.fake_addr)
+            _mock.sendto.assert_called_once_with(
+                pack_sd((entry,), session_id=i & 0xffff, reboot=i < 0x10000),
+                self.fake_addr,
+            )
+            _mock.reset_mock()
+
+            if i < 0x10020:
+                prot.send_sd([entry], self.multi_addr)
+                _mock.sendto.assert_called_once_with(
+                    pack_sd((entry,), session_id=i & 0xffff, reboot=i < 0x10000),
+                    self.multi_addr,
+                )
+                _mock.reset_mock()
+
+            if i % 64 == 0:
+                # yield to event loop every couple iterations
+                await asyncio.sleep(0)
 
     async def test_offer_start(self):
         prot = sd.ServiceDiscoveryProtocol(self.multi_addr)
@@ -276,8 +310,8 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
 
 
 class _BaseSDTest(unittest.IsolatedAsyncioTestCase):
-    multi_addr = ('::1', 30490, 0, 0)
-    fake_addr = ('::2', 30490, 0, 0)
+    multi_addr = ('2001:db8::1', 30490, 0, 0)
+    fake_addr = ('2001:db8::2', 30490, 0, 0)
     TTL = sd.TTL_FOREVER
 
     async def asyncSetUp(self):  # noqa: N802
@@ -573,8 +607,8 @@ class TestSDTTL1(_BaseSDTest):
 
 
 class TestSDFind(unittest.IsolatedAsyncioTestCase):
-    multi_addr = ('::1', 30490, 0, 0)
-    fake_addr = ('::2', 30490, 0, 0)
+    multi_addr = ('2001:db8::1', 30490, 0, 0)
+    fake_addr = ('2001:db8::2', 30490, 0, 0)
 
     async def asyncSetUp(self):  # noqa: N802
         self.prot = sd.ServiceDiscoveryProtocol(self.multi_addr)
@@ -710,9 +744,9 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase):
         )
 
         tdiffs = [t - self.t_start for t in self.send_times]
-        self.assertAlmostEqual(tdiffs[0], 0.2, places=2)
-        self.assertAlmostEqual(tdiffs[1], 0.3, places=2)
-        self.assertAlmostEqual(tdiffs[2], 0.5, places=2)
+        self.assertAlmostEqual(tdiffs[0], 0.2, places=1)
+        self.assertAlmostEqual(tdiffs[1], 0.3, places=1)
+        self.assertAlmostEqual(tdiffs[2], 0.5, places=1)
 
 
 if __name__ == '__main__':
