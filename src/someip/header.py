@@ -121,7 +121,7 @@ payload: {len(self.payload)} bytes'''
         size, builder = cls._parse_header(parsed)
         if len(buf_rest) < size - 8:
             raise IncompleteReadError(f'packet too short, expected {size+4}, got {len(buf)}')
-        payload_b, buf_rest = buf_rest[:size-8], buf_rest[size-8:]
+        payload_b, buf_rest = buf_rest[:size - 8], buf_rest[size - 8:]
 
         parsed = builder(payload_b)
 
@@ -133,7 +133,7 @@ payload: {len(self.payload)} bytes'''
         parsed = cls.__format.unpack(hdr_b)
         size, builder = cls._parse_header(parsed)
 
-        payload_b = await buf.readexactly(size-8)
+        payload_b = await buf.readexactly(size - 8)
 
         return builder(payload_b)
 
@@ -220,8 +220,8 @@ class SOMEIPSDEntry:
             oi2 = typing.cast(int, self.option_index_2)
             no1 = typing.cast(int, self.num_options_1)
             no2 = typing.cast(int, self.num_options_2)
-            s_options_1 = repr(range(oi1, oi1+no1))
-            s_options_2 = repr(range(oi2, oi2+no2))
+            s_options_1 = repr(range(oi1, oi1 + no1))
+            s_options_2 = repr(range(oi2, oi2 + no2))
 
         return f'type={self.sd_type.name}, service=0x{self.service_id:04x},' \
                f' instance=0x{self.instance_id:04x}, version={version}, ttl={self.ttl}, ' \
@@ -235,7 +235,7 @@ class SOMEIPSDEntry:
     @property
     def options_resolved(self):
         return self.option_index_1 is None or self.option_index_2 is None \
-                or self.num_options_1 is None or self.num_options_2 is None
+            or self.num_options_1 is None or self.num_options_2 is None
 
     def resolve_options(self, options: typing.Tuple[SOMEIPSDOption, ...]) -> SOMEIPSDEntry:
         if self.options_resolved:
@@ -296,7 +296,7 @@ class SOMEIPSDEntry:
     @classmethod
     def parse(cls, buf: bytes, num_options: int) -> typing.Tuple[SOMEIPSDEntry, bytes]:
         (sd_type_b, oi1, oi2, numopt, sid, iid, majv, ttl_hi, ttl_lo, val), buf_rest \
-                = unpack(cls.__format, buf)
+            = unpack(cls.__format, buf)
         try:
             sd_type = SOMEIPSDEntryType(sd_type_b)
         except ValueError as exc:
@@ -428,7 +428,7 @@ class SOMEIPSDConfigOption(SOMEIPSDAbstractOption):
             if split == -1:
                 configs.append((cfg_str.decode('ascii'), None))
             else:
-                key, value = cfg_str[:split], cfg_str[split+1:]
+                key, value = cfg_str[:split], cfg_str[split + 1:]
                 configs.append((key.decode('ascii'), value.decode('ascii')))
             nextlen, b = b[0], b[1:]
         return cls(configs=configs)
