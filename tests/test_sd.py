@@ -308,6 +308,27 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
         prot.sd_message_received.assert_not_called()
         prot.log.error.assert_called_once()
 
+    async def test_sd_subscribe_bad_ttl(self):
+        with self.assertRaises(ValueError):
+            sd.SubscriptionProtocol(0)
+        with self.assertRaises(ValueError):
+            sd.SubscriptionProtocol(sd.TTL_FOREVER)
+
+    async def test_sd_subscribe_no_transport(self):
+        prot = sd.SubscriptionProtocol(ttl=None, refresh_interval=None)
+        prot.log = unittest.mock.Mock()
+
+        evgrp_1 = cfg.Eventgroup(service_id=0x1111, instance_id=0x4444, major_version=0x66,
+                                 eventgroup_id=0xccdd, sockname=self.fake_addr,
+                                 protocol=hdr.L4Protocols.UDP)
+
+        prot.subscribe_eventgroup(evgrp_1, self.multi_addr)
+        prot.start()
+        await asyncio.sleep(0)
+        prot.stop()
+
+        prot.log.error.assert_called_once()
+
 
 class _BaseSDTest(unittest.IsolatedAsyncioTestCase):
     multi_addr = ('2001:db8::1', 30490, 0, 0)
@@ -747,6 +768,192 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(tdiffs[0], 0.2, places=1)
         self.assertAlmostEqual(tdiffs[1], 0.3, places=1)
         self.assertAlmostEqual(tdiffs[2], 0.5, places=1)
+
+
+class TestEventgroup(unittest.IsolatedAsyncioTestCase):
+    local_addr = ('2001:db8::ff', 30331, 0, 0)
+    remote1_addr = ('2001:db8::1', 30332, 0, 0)
+    remote2_addr = ('2001:db8::2', 30337, 0, 0)
+    maxDiff = None
+
+    async def asyncSetUp(self):  # noqa: N802
+        self.prot = sd.SubscriptionProtocol(ttl=self.TTL, refresh_interval=self.REFRESH_INTERVAL)
+        self.prot.ttl_offset = 2
+
+        self.evgrp_1 = cfg.Eventgroup(service_id=0x1111, instance_id=0x4444, major_version=0x66,
+                                      eventgroup_id=0xccdd, sockname=self.local_addr,
+                                      protocol=hdr.L4Protocols.UDP)
+        self.sub_evgrp_1 = self.evgrp_1.create_subscribe_entry(self.TTL or 0xffffff)
+        self.stop_sub_evgrp_1 = self.evgrp_1.create_subscribe_entry(0)
+
+        self.evgrp_2 = cfg.Eventgroup(service_id=0x2222, instance_id=0x5555, major_version=0x66,
+                                      eventgroup_id=0xccdd, sockname=self.local_addr,
+                                      protocol=hdr.L4Protocols.UDP)
+        self.sub_evgrp_2 = self.evgrp_2.create_subscribe_entry(self.TTL or 0xffffff)
+        self.stop_sub_evgrp_2 = self.evgrp_2.create_subscribe_entry(0)
+
+        self.evgrp_3 = cfg.Eventgroup(service_id=0x3333, instance_id=0x6666, major_version=0x77,
+                                      eventgroup_id=0xaabb, sockname=self.local_addr,
+                                      protocol=hdr.L4Protocols.UDP)
+        self.sub_evgrp_3 = self.evgrp_3.create_subscribe_entry(self.TTL or 0xffffff)
+        self.stop_sub_evgrp_3 = self.evgrp_3.create_subscribe_entry(0)
+
+        self.prot.transport = unittest.mock.Mock()
+        self._mock_sendto = self.prot.transport.sendto
+
+
+class TestEventgroupTTL3(TestEventgroup):
+    TTL = 3
+    REFRESH_INTERVAL = 1
+
+    async def test_subscribe(self):
+        self.prot.subscribe_eventgroup(self.evgrp_1, self.remote1_addr)
+        self.prot.subscribe_eventgroup(self.evgrp_2, self.remote2_addr)
+        self.prot.start()
+
+        await asyncio.sleep(0)
+
+        self.assertCountEqual(
+            self._mock_sendto.call_args_list,
+            (
+                unittest.mock.call(pack_sd((self.sub_evgrp_1,)), self.remote1_addr),
+                unittest.mock.call(pack_sd((self.sub_evgrp_2,)), self.remote2_addr),
+            ),
+        )
+        self._mock_sendto.reset_mock()
+
+        # add new eventgroup, show subscription in next cycle
+        self.prot.subscribe_eventgroup(self.evgrp_3, self.remote1_addr)
+
+        await asyncio.sleep(1)
+
+        self.assertCountEqual(
+            self._mock_sendto.call_args_list,
+            (
+                unittest.mock.call(pack_sd((
+                    self.sub_evgrp_1, self.sub_evgrp_3,
+                ), session_id=2), self.remote1_addr),
+                unittest.mock.call(pack_sd((self.sub_evgrp_2,), session_id=2), self.remote2_addr),
+            ),
+        )
+        self._mock_sendto.reset_mock()
+
+        # remove eventgroup, send stop subscribe
+        self.prot.stop_subscribe_eventgroup(self.evgrp_1, self.remote1_addr)
+
+        await asyncio.sleep(0)
+
+        self._mock_sendto.assert_called_once_with(
+            pack_sd((self.stop_sub_evgrp_1,), session_id=3),
+            self.remote1_addr,
+        )
+        self._mock_sendto.reset_mock()
+
+        # remove eventgroup again => don't send stop again
+        self.prot.stop_subscribe_eventgroup(self.evgrp_1, self.remote1_addr)
+
+        await asyncio.sleep(0)
+
+        self._mock_sendto.assert_not_called()
+        self._mock_sendto.reset_mock()
+
+        # show changed subscription messages after stop
+        await asyncio.sleep(1)
+
+        self.assertCountEqual(
+            self._mock_sendto.call_args_list,
+            (
+                unittest.mock.call(pack_sd((self.sub_evgrp_3,), session_id=4), self.remote1_addr),
+                unittest.mock.call(pack_sd((self.sub_evgrp_2,), session_id=3), self.remote2_addr),
+            ),
+        )
+        self._mock_sendto.reset_mock()
+
+        # remove last eventgroup of endpoint, send stop subscribe
+        self.prot.stop_subscribe_eventgroup(self.evgrp_3, self.remote1_addr)
+
+        await asyncio.sleep(0)
+
+        self._mock_sendto.assert_called_once_with(
+            pack_sd((self.stop_sub_evgrp_3,), session_id=5),
+            self.remote1_addr,
+        )
+        self._mock_sendto.reset_mock()
+
+        # show changed subscription messages after stop
+        await asyncio.sleep(1)
+
+        self._mock_sendto.assert_called_once_with(
+            pack_sd((self.sub_evgrp_2,), session_id=4),
+            self.remote2_addr,
+        )
+        self._mock_sendto.reset_mock()
+
+
+class TestEventgroupTTLForever(TestEventgroup):
+    TTL = None
+    REFRESH_INTERVAL = None
+
+    async def test_subscribe(self):
+        self.prot.subscribe_eventgroup(self.evgrp_1, self.remote1_addr)
+        self.prot.subscribe_eventgroup(self.evgrp_2, self.remote2_addr)
+        self.prot.start()
+
+        await asyncio.sleep(0)
+
+        self.assertCountEqual(
+            self._mock_sendto.call_args_list,
+            (
+                unittest.mock.call(pack_sd((self.sub_evgrp_1,)), self.remote1_addr),
+                unittest.mock.call(pack_sd((self.sub_evgrp_2,)), self.remote2_addr),
+            ),
+        )
+        self._mock_sendto.reset_mock()
+
+        self.prot.subscribe_eventgroup(self.evgrp_3, self.remote1_addr)
+
+        await asyncio.sleep(0)
+        self._mock_sendto.assert_called_once_with(
+            pack_sd((self.sub_evgrp_3,), session_id=2),
+            self.remote1_addr,
+        )
+
+    async def test_sd_stop_send_stop(self):
+        self.prot.subscribe_eventgroup(self.evgrp_1, self.remote1_addr)
+        self.prot.start()
+        await asyncio.sleep(0)
+
+        self._mock_sendto.assert_called_once_with(
+            pack_sd((self.sub_evgrp_1,), session_id=1),
+            self.remote1_addr,
+        )
+        self._mock_sendto.reset_mock()
+
+        self.prot.stop()
+
+        await asyncio.sleep(0)
+
+        self._mock_sendto.assert_called_once_with(
+            pack_sd((self.stop_sub_evgrp_1,), session_id=2),
+            self.remote1_addr,
+        )
+
+    async def test_sd_stop_no_send_stop(self):
+        self.prot.subscribe_eventgroup(self.evgrp_1, self.remote1_addr)
+        self.prot.start()
+        await asyncio.sleep(0)
+
+        self._mock_sendto.assert_called_once_with(
+            pack_sd((self.sub_evgrp_1,), session_id=1),
+            self.remote1_addr,
+        )
+        self._mock_sendto.reset_mock()
+
+        self.prot.stop(send_stop_subscribe=False)
+
+        await asyncio.sleep(0)
+
+        self._mock_sendto.assert_not_called()
 
 
 if __name__ == '__main__':

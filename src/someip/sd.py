@@ -14,7 +14,7 @@ import netifaces  # type: ignore[import]
 import someip.header
 import someip.config
 from someip.config import _T_SOCKNAME as _T_SOCKADDR
-from someip.utils import log_exceptions
+from someip.utils import log_exceptions, wait_cancelled
 
 LOG = logging.getLogger('someip.sd')
 _T_IPADDR = typing.Union[ipaddress.IPv4Address, ipaddress.IPv6Address]
@@ -54,7 +54,7 @@ class SOMEIPDatagramProtocol:
                                       remote_addr: _T_OPT_SOCKADDR = None,
                                       loop=None,
                                       **kwargs):
-        if loop is None:  # pragma: nocover
+        if loop is None:  # pragma: nobranch
             loop = asyncio.get_event_loop()
         protocol = cls(*args, **kwargs)
         transport, _ = await loop.create_datagram_endpoint(
@@ -66,7 +66,7 @@ class SOMEIPDatagramProtocol:
 
     def __init__(self, logger: str = 'someip'):
         self.log = logging.getLogger(logger)
-        self.transport: asyncio.DatagramTransport
+        self.transport: typing.Optional[asyncio.DatagramTransport] = None
         self.session_storage = _SessionStorage()
 
         # default_addr=None means use connected address from socket
@@ -114,6 +114,10 @@ class SOMEIPDatagramProtocol:
         # default_addr. However, after connect() the socket will not be bound to INADDR_ANY
         # anymore. so we store the multicast address as a default destination address on the
         # isntance and wrap the send calls with self.send
+        if self.transport is None:  # pragma: nocover
+            self.log.error('no transport set on %r but tried to send to %r: %r',
+                           self, remote, buf)
+            return
         self.transport.sendto(buf, remote or self.default_addr)  # type: ignore[arg-type]
 
     def send_sd(self, entries: typing.Collection[someip.header.SOMEIPSDEntry],
@@ -187,7 +191,7 @@ class _BaseSDProtocol(SOMEIPDatagramProtocol):
         sdhdr_resolved = sdhdr.resolve_options()
         self.sd_message_received(sdhdr_resolved, addr, multicast)
 
-        if rest:
+        if rest:  # pragma: nocover
             self.log.warning('unparsed data after SD from %s: %r', self.format_address(addr), rest)
 
     def sd_message_received(self, sdhdr: someip.header.SOMEIPSDHeader,
@@ -254,20 +258,28 @@ class SubscriptionProtocol(_BaseSDProtocol):
         TODO
     '''
 
-    def __init__(self, ttl=5):
+    def __init__(self, ttl=5, refresh_interval=3):
         super().__init__(logger='someip.subscribe')
         if ttl == 0 or ttl == TTL_FOREVER:
             raise ValueError('ttl may not be 0 or 0xffffff. set to None for "forever"')
-        self.ttl = ttl
-        self.ttl_offset = 2
 
-        self.task = None
+        if not refresh_interval and ttl:  # pragma: nocover
+            self.log.warning('no refresh, but ttl=%r set. expect lost connection after ttl', ttl)
+        elif refresh_interval and refresh_interval > ttl:  # pragma: nocover
+            self.log.warning('refresh_interval=%r too high for ttl=%r. expect dropped updates.',
+                             refresh_interval, ttl)
+        self.ttl = ttl
+        self.refresh_interval = refresh_interval
+
+        self.task: typing.Optional[asyncio.Task[None]] = None
+        # separate alive tracking (instead of using task.done()) as task will only run
+        # for one iteration when ttl=None
         self.alive = False
 
-        self.subscribeentries: typing.Set[typing.Tuple[
+        self.subscribeentries: typing.List[typing.Tuple[
             someip.config.Eventgroup,
             _T_SOCKADDR,
-        ]] = set()
+        ]] = []
 
     def subscribe_eventgroup(self, eventgroup: someip.config.Eventgroup, endpoint: _T_SOCKADDR) \
             -> None:
@@ -279,9 +291,9 @@ class SubscriptionProtocol(_BaseSDProtocol):
           remote SD endpoint that will receive the subscription messages
         '''
         # relies on _subscribe() to send out the Subscribe messages in the next cycle.
-        self.subscribeentries.add((eventgroup, endpoint))
+        self.subscribeentries.append((eventgroup, endpoint))
 
-        if self.ttl is None and self.alive:
+        if not self.refresh_interval and self.alive:
             # when TTL=forever, _subscribe() task does not run continuously, so we need to send
             # individual subscribe entries directly
             asyncio.get_event_loop().call_soon(self._send_start_subscribe, endpoint, [eventgroup])
@@ -296,10 +308,10 @@ class SubscriptionProtocol(_BaseSDProtocol):
         '''
         try:
             self.subscribeentries.remove((eventgroup, endpoint))
-        except KeyError:
+        except ValueError:
             return
 
-        self._send_stop_subscribe(endpoint, [eventgroup])
+        asyncio.get_event_loop().call_soon(self._send_stop_subscribe, endpoint, [eventgroup])
 
     def _send_stop_subscribe(self, remote: _T_SOCKADDR,
                              entries: typing.Collection[someip.config.Eventgroup]) -> None:
@@ -312,39 +324,39 @@ class SubscriptionProtocol(_BaseSDProtocol):
     def _send_subscribe(self, ttl: int, remote: _T_SOCKADDR,
                         entries: typing.Collection[someip.config.Eventgroup]) -> None:
         if not self.transport:
-            return
-
-        if not entries:
+            self.log.error('no transport set on %r but tried to send to %r: %r',
+                           self, remote, entries)
             return
 
         self.send_sd([e.create_subscribe_entry(ttl=ttl) for e in entries], remote=remote)
 
-    def start(self, loop=None):
-        if self.task is not None or self.alive:
+    def start(self, loop=None) -> None:
+        if self.alive:  # pragma: nocover
             return
-        if loop is None:
+        if loop is None:  # pragma: nobranch
             loop = asyncio.get_event_loop()
 
         self.alive = True
         self.task = loop.create_task(self._subscribe())
 
-    def stop(self, send_stop_subscribe=True):
+    def stop(self, send_stop_subscribe=True) -> None:
         self.alive = False
 
-        if self.task:
+        if self.task:  # pragma: nobranch
             self.task.cancel()
+            asyncio.create_task(wait_cancelled(self.task))
             self.task = None
 
         if send_stop_subscribe:
             for endpoint, entries in self._group_entries().items():
-                self._send_stop_subscribe(endpoint, entries)
+                asyncio.get_event_loop().call_soon(self._send_stop_subscribe, endpoint, entries)
 
     def _group_entries(self) -> typing.Mapping[_T_SOCKADDR,
                                                typing.Collection[someip.config.Eventgroup]]:
-        endpoint_entries: typing.DefaultDict[_T_SOCKADDR, typing.Set[someip.config.Eventgroup]] \
-            = collections.defaultdict(set)
+        endpoint_entries: typing.DefaultDict[_T_SOCKADDR, typing.List[someip.config.Eventgroup]] \
+            = collections.defaultdict(list)
         for eventgroup, endpoint in self.subscribeentries:
-            endpoint_entries[endpoint].add(eventgroup)
+            endpoint_entries[endpoint].append(eventgroup)
         return endpoint_entries
 
     def connection_lost(self, exc: typing.Optional[Exception]) -> None:
@@ -352,19 +364,16 @@ class SubscriptionProtocol(_BaseSDProtocol):
         self.stop(send_stop_subscribe=False)
 
     @log_exceptions()
-    async def _subscribe(self):
-        while self.alive:
+    async def _subscribe(self) -> None:
+        while True:
             for endpoint, entries in self._group_entries().items():
                 self._send_start_subscribe(endpoint, entries)
 
-            if self.ttl is None:
+            if self.refresh_interval is None:
                 break
 
-            if self.ttl_offset >= self.ttl:
-                raise ValueError('ttl_offset too big')
-
             try:
-                await asyncio.sleep(self.ttl - self.ttl_offset)
+                await asyncio.sleep(self.refresh_interval)
             except asyncio.CancelledError:
                 break
 
@@ -381,8 +390,10 @@ class SubscriptionProtocol(_BaseSDProtocol):
             if entry.sd_type == someip.header.SOMEIPSDEntryType.SubscribeAck:
                 if entry.ttl == 0:
                     self.log.info('received Subscribe NACK from %s: %s', faddr, entry)
+                    # TODO raise NACK to application
                 else:
                     self.log.info('received Subscribe ACK from %s: %s', faddr, entry)
+                    # TODO raise ACK to application
             else:
                 self.log.warning('unexpected entry received from %s: %s', faddr, entry)
 
@@ -403,7 +414,7 @@ class _BaseMulticastSDProtocol(_BaseSDProtocol):
     @classmethod
     async def create_endpoints(cls, local_addr: _T_IPADDR, multicast_addr: _T_IPADDR,
                                port: int = 30490, ttl=1, loop=None):
-        if loop is None:
+        if loop is None:  # pragma: nobranch
             loop = asyncio.get_event_loop()
         if not multicast_addr.is_multicast:
             raise ValueError('multicast_addr is not multicast')
@@ -712,7 +723,7 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
     def start(self, loop=None):
         if self.task is not None or self.alive:
             return
-        if loop is None:
+        if loop is None:  # pragma: nobranch
             loop = asyncio.get_event_loop()
 
         self.alive = True

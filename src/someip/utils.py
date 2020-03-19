@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import asyncio
 import functools
 import socket
+import typing
 
 
 def log_exceptions(msg='unhandled exception in {__func__}'):
@@ -17,6 +20,8 @@ def log_exceptions(msg='unhandled exception in {__func__}'):
             async def wrapper(self, *args, **kwargs):
                 try:
                     return await f(self, *args, **kwargs)
+                except asyncio.CancelledError:
+                    pass
                 except Exception:
                     self.log.exception(msg.format(__func__=f.__qualname__, *args, **kwargs))
         else:
@@ -47,3 +52,15 @@ async def getfirstaddrinfo(host, port, family=0, type=0, proto=0, sock=None, fla
     if not result:
         raise socket.gaierror(socket.EAI_NODATA, f'no address info found for {host}:{port}')
     return result[0]
+
+
+T = typing.TypeVar('T')
+
+
+async def wait_cancelled(task: asyncio.Task[T]) -> typing.Optional[T]:
+    # I'd go with try: await task; except asyncio.CancelledError, but this can not discern between
+    # task raising cancelled or this current task being cancelled.
+    res = await asyncio.gather(task, return_exceptions=True)
+    if isinstance(res[0], asyncio.CancelledError):
+        return None
+    return task.result()
