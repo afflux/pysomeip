@@ -2,3 +2,24 @@
 # Minimum requirements for the build system to execute.
 requires = ['setuptools', 'wheel', 'pip']  # PEP 508 specifications.
 build-backend = 'setuptools.build_meta'
+
+[tool.coverage.run]
+branch = true
+source = [
+    'someip'
+]
+omit = [
+    '*/_version.py',
+]
+
+[tool.coverage.paths]
+source = [
+    'src/',
+    '*/site-packages/',
+]
+
+[tool.coverage.report]
+partial_branches = [
+    ':\s*\.\.\.',
+    '#\s*(pragma|PRAGMA)[:\s]?\s*(no|NO)\s*(branch|BRANCH)',
+]
