@@ -1,6 +1,5 @@
 import asyncio
 import collections
-import dataclasses
 import ipaddress
 import logging
 import random
@@ -117,8 +116,18 @@ class SOMEIPDatagramProtocol:
         # isntance and wrap the send calls with self.send
         self.transport.sendto(buf, remote or self.default_addr)  # type: ignore[arg-type]
 
-    def send_sd(self, msg: someip.header.SOMEIPSDHeader, remote: _T_OPT_SOCKADDR = None) -> None:
+    def send_sd(self, entries: typing.Collection[someip.header.SOMEIPSDEntry],
+                remote: _T_OPT_SOCKADDR = None) -> None:
+        if not entries:
+            return
         flag_reboot, session_id = self.session_storage.assign_outgoing(remote)
+
+        msg = someip.header.SOMEIPSDHeader(
+            flag_reboot=flag_reboot,
+            flag_unicast=True,  # 4.2.1, TR_SOMEIP_00540 receiving unicast is supported
+            entries=tuple(entries),
+        )
+        msg_assigned = msg.assign_option_indexes()
 
         hdr = someip.header.SOMEIPHeader(
             service_id=someip.header.SD_SERVICE,
@@ -127,7 +136,7 @@ class SOMEIPDatagramProtocol:
             session_id=session_id,
             interface_version=1,
             message_type=someip.header.SOMEIPMessageType.NOTIFICATION,
-            payload = dataclasses.replace(msg, flag_reboot=flag_reboot).build(),
+            payload=msg_assigned.build(),
         )
 
         self.send(hdr.build(), remote)
@@ -225,7 +234,7 @@ class _SessionStorage:
 
     def assign_outgoing(self, remote: _T_OPT_SOCKADDR):
         # need a lock for outgoing messages if they may be sent from separate threads
-        # eg. when an application logic runs in a seperate therad from the SOMEIP stack event loop
+        # eg. when an application logic runs in a seperate thread from the SOMEIP stack event loop
         with self.outgoing_lock:
             flag, _id = self.outgoing[remote]
             if _id >= 0xffff:
@@ -308,13 +317,7 @@ class SubscriptionProtocol(_BaseSDProtocol):
         if not entries:
             return
 
-        sdhdr = someip.header.SOMEIPSDHeader(
-            flag_unicast=True,
-            entries=tuple(e.create_subscribe_entry(ttl=ttl) for e in entries),
-        )
-        sdhdr_assigned = sdhdr.assign_option_indexes()
-
-        self.send_sd(sdhdr_assigned, remote=remote)
+        self.send_sd([e.create_subscribe_entry(ttl=ttl) for e in entries], remote=remote)
 
     def start(self, loop=None):
         if self.task is not None or self.alive:
@@ -393,7 +396,7 @@ class _BaseMulticastSDProtocol(_BaseSDProtocol):
     REPETITIONS_BASE_DELAY = 0.03  # in seconds
     CYCLIC_OFFER_DELAY = 10  # in seconds
 
-    def __init__(self, multicast_addr: typing.Tuple[str, int], logger: str = 'someip.sd.abstract'):
+    def __init__(self, multicast_addr: _T_SOCKADDR, logger: str = 'someip.sd.abstract'):
         super().__init__(logger=logger)
         self.default_addr = multicast_addr
 
@@ -479,8 +482,8 @@ class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
     def __init__(self, multicast_addr: typing.Tuple[str, int], logger: str = 'someip.sd.discover'):
         super().__init__(logger=logger, multicast_addr=multicast_addr)
         self.watched_services: typing.Dict[
-                someip.config.Service,
-                typing.Set[ServiceListener],
+            someip.config.Service,
+            typing.Set[ServiceListener],
         ] = collections.defaultdict(set)
         self.watcher_all_services: typing.Set[ServiceListener] = set()
 
@@ -536,18 +539,14 @@ class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
         await asyncio.sleep(random.uniform(self.INITIAL_DELAY_MIN, self.INITIAL_DELAY_MAX))
 
         for i in range(self.REPETITIONS_MAX):
-            find_entries = tuple(service.create_find_entry()
-                                 for service in self.watched_services.keys()
-                                 if not self._service_found(service))
+            self.send_sd([
+                service.create_find_entry()
+                for service in self.watched_services.keys()
+                if not self._service_found(service)
+            ])
 
-            sdhdr = someip.header.SOMEIPSDHeader(
-                flag_unicast=True,
-                entries=find_entries,
-            )
-            sdhdr_assigned = sdhdr.assign_option_indexes()
-            self.send_sd(sdhdr_assigned)
-
-            await asyncio.sleep((2**i) * self.REPETITIONS_BASE_DELAY)
+            if i != self.REPETITIONS_MAX - 1:
+                await asyncio.sleep((2**i) * self.REPETITIONS_BASE_DELAY)
 
     def service_offered(self, addr: _T_SOCKADDR, entry: someip.header.SOMEIPSDEntry):
         service = someip.config.Service.from_offer_entry(entry)
@@ -695,7 +694,7 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
         # refresh the CYCLIC_OFFER_DELAY timer when the multicast send condition is fulfilled.
         # => assume no, since that would only work if all services were sent out
         time_since_last_offer = asyncio.get_event_loop().time() - self._last_multicast_offer
-        answer_with_multicast = time_since_last_offer > self.CYCLIC_OFFER_DELAY/2 \
+        answer_with_multicast = time_since_last_offer > self.CYCLIC_OFFER_DELAY / 2 \
             or not unicast_supported
 
         # 4.2.1 TR_SOMEIP_00419
@@ -758,16 +757,11 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
     def _send_offers(self, services: typing.Collection[someip.config.Service],
                      remote: _T_OPT_SOCKADDR = None,
                      stop: bool = False):
-        entries = tuple(s.create_offer_entry(self.TTL if not stop else 0) for s in services)
+        entries = [s.create_offer_entry(self.TTL if not stop else 0) for s in services]
 
-        sdhdr = someip.header.SOMEIPSDHeader(
-            flag_unicast=True,
-            entries=entries,
-        )
-        sdhdr_assigned = sdhdr.assign_option_indexes()
         if not remote:
             self._last_multicast_offer = asyncio.get_event_loop().time()
-        self.send_sd(sdhdr_assigned, remote=remote)
+        self.send_sd(entries, remote=remote)
 
     def reboot_detected(self, addr: _T_SOCKADDR) -> None:
         # TODO remove Eventgroup subscriptions for endpoint
