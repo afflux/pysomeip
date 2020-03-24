@@ -2,10 +2,11 @@ import asyncio
 import collections
 import ipaddress
 import logging
+import os
+import platform
 import random
 import socket
 import struct
-import sys
 import threading
 import typing
 
@@ -16,11 +17,28 @@ import someip.config
 from someip.config import _T_SOCKNAME as _T_SOCKADDR
 from someip.utils import log_exceptions, wait_cancelled
 
+try:
+    from asyncio import ProactorEventLoop  # type: ignore[attr-defined]
+except ImportError:
+    ProactorEventLoop = ()
+
 LOG = logging.getLogger('someip.sd')
 _T_IPADDR = typing.Union[ipaddress.IPv4Address, ipaddress.IPv6Address]
 _T_OPT_SOCKADDR = typing.Optional[_T_SOCKADDR]
 
 TTL_FOREVER = 0xffffff
+
+
+def ip_address(s: str) -> _T_IPADDR:
+    return typing.cast(_T_IPADDR, ipaddress.ip_address(s.split('%', 1)[0]))
+
+
+def pack_addr_v4(a):
+    return socket.inet_pton(socket.AF_INET, a.split('%', 1)[0])
+
+
+def pack_addr_v6(a):
+    return socket.inet_pton(socket.AF_INET6, a.split('%', 1)[0])
 
 
 def _addr_to_ifindex(addr: _T_IPADDR) -> typing.Optional[int]:
@@ -33,7 +51,7 @@ def _addr_to_ifindex(addr: _T_IPADDR) -> typing.Optional[int]:
 
     for ifindex, ifname in socket.if_nameindex():
         for if_addr in netifaces.ifaddresses(ifname).get(family, []):
-            if_ip = ipaddress.ip_address(if_addr['addr'].split('%', 1)[0])
+            if_ip = ip_address(if_addr['addr'])
             if addr == if_ip:
                 return ifindex
 
@@ -151,7 +169,7 @@ class DatagramProtocolAdapter(asyncio.DatagramProtocol):
         self.is_multicast = is_multicast
         self.protocol = protocol
 
-    def datagram_received(self, data, addr: typing.Tuple[str, int]) -> None:
+    def datagram_received(self, data, addr: _T_SOCKADDR) -> None:
         self.protocol.datagram_received(data, addr, multicast=self.is_multicast)
 
     def error_received(self, exc: typing.Optional[Exception]) -> None:  # pragma: nocover
@@ -412,67 +430,130 @@ class _BaseMulticastSDProtocol(_BaseSDProtocol):
         self.default_addr = multicast_addr
 
     @classmethod
-    async def create_endpoints(cls, local_addr: _T_IPADDR, multicast_addr: _T_IPADDR,
+    async def _create_endpoint(cls, loop: asyncio.BaseEventLoop,
+                               prot: SOMEIPDatagramProtocol,
+                               family: socket.AddressFamily,
+                               local_addr: str, port: int,
+                               multicast_addr: typing.Optional[str] = None,
+                               multicast_interface: typing.Optional[str] = None,
+                               ttl: int = 1):
+
+        if family not in (socket.AF_INET, socket.AF_INET6):
+            raise ValueError('only IPv4 and IPv6 supported, got {family!r}')
+
+        if os.name == 'posix':  # pragma: nocover
+            # multicast binding:
+            # - BSD: will only receive packets destined for multicast addr,
+            #        but will send with address from bind()
+            # - Linux: will receive all multicast traffic destined for this port,
+            #          can be filtered using bind()
+            bind_addr: typing.Optional[str] = local_addr
+            if multicast_addr:
+                bind_addr = None
+                if platform.system() == 'Linux':  # pragma: nocover
+                    if family == socket.AF_INET or '%' in multicast_addr:
+                        bind_addr = multicast_addr
+                    else:
+                        bind_addr = f'{multicast_addr}%{multicast_interface}'
+            # wrong type in asyncio typeshed, should be optional
+            bind_addr = typing.cast(str, bind_addr)
+
+            trsp, _ = await loop.create_datagram_endpoint(
+                lambda: DatagramProtocolAdapter(prot, is_multicast=bool(multicast_addr)),
+                local_addr=(bind_addr, port),
+                reuse_port=True,
+                family=family,
+                proto=socket.IPPROTO_UDP,
+                flags=socket.AI_PASSIVE,
+            )
+        elif platform.system() == 'Windows':  # pragma: nocover
+            sock = socket.socket(family=family, type=socket.SOCK_DGRAM, proto=socket.IPPROTO_UDP)
+
+            if family == socket.AF_INET6 and isinstance(loop, ProactorEventLoop):
+                prot.log.warning(
+                    'ProactorEventLoop has issues with ipv6 datagram sockets!'
+                    ' https://bugs.python.org/issue39148. workaround with'
+                    ' asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())',
+                )
+
+            # python disallowed SO_REUSEADDR on create_datagram_endpoint.
+            # https://bugs.python.org/issue37228
+            # Windows doesnt have SO_REUSEPORT and the problem apparently does not exist for
+            # multicast, so we need to set SO_REUSEADDR on the socket manually
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+            addrinfos = await loop.getaddrinfo(
+                local_addr, port,
+                family=sock.family, type=sock.type, proto=sock.proto, flags=socket.AI_PASSIVE,
+            )
+            if not addrinfos:
+                raise RuntimeError(f'could not resolve local_addr={local_addr!r} port={port!r}')
+
+            ai = addrinfos[0]
+
+            sock.bind(ai[4])
+            trsp, _ = await loop.create_datagram_endpoint(
+                lambda: DatagramProtocolAdapter(prot, is_multicast=bool(multicast_addr)),
+                sock=sock,
+            )
+        else:  # pragma: nocover
+            raise NotImplementedError(f'unsupported platform {os.name=} {platform.system()=}')
+
+        sock = trsp.get_extra_info('socket')
+
+        try:
+            if family == socket.AF_INET:
+                packed_local_addr = pack_addr_v4(local_addr)
+                if multicast_addr:
+                    packed_mcast_addr = pack_addr_v4(multicast_addr)
+                    mreq = struct.pack('=4s4s', packed_mcast_addr, packed_local_addr)
+                    sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+                sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, packed_local_addr)
+                sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl)
+                # we want other implementations on the same host to receive our messages
+                sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
+
+            else:  # AF_INET6
+                if multicast_interface is None:
+                    raise ValueError('ipv6 requires interface name')
+                ifindex = socket.if_nametoindex(multicast_interface)
+                if multicast_addr:
+                    packed_mcast_addr = pack_addr_v6(multicast_addr)
+                    mreq = struct.pack("=16sl", packed_mcast_addr, ifindex)
+                    sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
+                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_IF,
+                                struct.pack('=i', ifindex))
+                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS, ttl)
+                # we want other implementations on the same host to receive our messages
+                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_LOOP, 1)
+        except BaseException:
+            trsp.close()
+            raise
+
+        return trsp
+
+    @classmethod
+    async def create_endpoints(cls, family: socket.AddressFamily,
+                               local_addr: str, multicast_addr: str,
+                               multicast_interface: typing.Optional[str] = None,
                                port: int = 30490, ttl=1, loop=None):
         if loop is None:  # pragma: nobranch
             loop = asyncio.get_event_loop()
-        if not multicast_addr.is_multicast:
+        if not ip_address(multicast_addr).is_multicast:
             raise ValueError('multicast_addr is not multicast')
-
-        if isinstance(local_addr, ipaddress.IPv4Address):
-            family = socket.AF_INET
-        elif isinstance(local_addr, ipaddress.IPv6Address):
-            family = socket.AF_INET6
-        else:
-            raise ValueError('local_addr must be ipv4 or ipv6 address')
 
         # since posix does not provide a portable interface to figure out what address a datagram
         # was received on, we need one unicast and one multicast socket
         prot = cls((str(multicast_addr), port))
 
-        trsp_u, _ = await loop.create_datagram_endpoint(
-            lambda: DatagramProtocolAdapter(prot, is_multicast=False),
-            local_addr=(str(local_addr), port),
-            family=family,
-            proto=socket.IPPROTO_UDP,
-            reuse_address=True,
-            reuse_port=True,
-        )
+        trsp_m = await cls._create_endpoint(loop, prot, family, local_addr, port,
+                                            multicast_addr=multicast_addr,
+                                            multicast_interface=multicast_interface, ttl=ttl)
+
+        trsp_u = await cls._create_endpoint(loop, prot, family, local_addr, port,
+                                            multicast_interface=multicast_interface, ttl=ttl)
+
         prot.transport = trsp_u
-
-        trsp_m, _ = await loop.create_datagram_endpoint(
-            lambda: DatagramProtocolAdapter(prot, is_multicast=True),
-            local_addr=((str(multicast_addr), port)),
-            family=family,
-            proto=socket.IPPROTO_UDP,
-            reuse_address=True,
-            reuse_port=True,
-        )
-
-        sock = trsp_m.get_extra_info('socket')
-
-        if not sock:
-            raise RuntimeError('trsp_m has no socket')
-
-        if isinstance(multicast_addr, ipaddress.IPv4Address):
-            if sys.platform == 'linux':
-                ifindex = _addr_to_ifindex(local_addr)
-                mreq = struct.pack('=4s4si', multicast_addr.packed, local_addr.packed, ifindex)
-            else:
-                mreq = struct.pack('=4s4s', multicast_addr.packed, local_addr.packed)
-            sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
-            sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, mreq)
-            sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl)
-            sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
-
-        if isinstance(multicast_addr, ipaddress.IPv6Address):
-            ifindex = _addr_to_ifindex(local_addr)
-            mreq = struct.pack("=16sl", multicast_addr.packed, ifindex)
-            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
-            sock.setsockopt(socket.IPPROTO_IPV6,
-                            socket.IPV6_MULTICAST_IF, struct.pack('=i', ifindex))
-            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS, ttl)
-            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_LOOP, 0)
 
         return trsp_u, trsp_m, prot
 

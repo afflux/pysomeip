@@ -2,9 +2,10 @@ import asyncio
 import ipaddress
 import itertools
 import logging
+import socket
+import struct
 import unittest
 import unittest.mock
-import socket
 from dataclasses import replace
 
 import someip.header as hdr
@@ -328,6 +329,35 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
         prot.stop()
 
         prot.log.error.assert_called_once()
+
+    async def test_sd_multicast_bad_af(self):
+        with self.assertRaises(ValueError):
+            await sd.ServiceDiscoveryProtocol.create_endpoints(
+                family=socket.AF_PACKET,
+                local_addr='127.0.0.1',
+                multicast_addr='224.244.224.245',
+                port=30490,
+                multicast_interface='lo',
+            )
+
+    async def test_sd_multicast_bad_mc_addr(self):
+        with self.assertRaises(ValueError):
+            await sd.ServiceDiscoveryProtocol.create_endpoints(
+                family=socket.AF_INET,
+                local_addr='127.0.0.1',
+                multicast_addr='127.0.0.1',
+                port=30490,
+                multicast_interface='lo',
+            )
+
+    async def test_sd_multicast_ipv6_missing_if(self):
+        with self.assertRaises(ValueError):
+            await sd.ServiceDiscoveryProtocol.create_endpoints(
+                family=socket.AF_INET6,
+                local_addr='::1',
+                multicast_addr='ff02::dead:beef%lo',
+                port=30490,
+            )
 
 
 class _BaseSDTest(unittest.IsolatedAsyncioTestCase):
@@ -954,6 +984,167 @@ class TestEventgroupTTLForever(TestEventgroup):
         await asyncio.sleep(0)
 
         self._mock_sendto.assert_not_called()
+
+
+class _MulticastEndpointsTest:
+    maxDiff = None
+    AF: socket.AddressFamily
+    bind_lo_addr: str
+    bind_mc_addr: str
+    bind_interface: str
+    send_addr: str
+    sender_lo_addr: str
+    send_mc_addr: str
+
+    def _mc_sockopts(self, sock: socket.socket) -> None: ...
+
+    async def asyncSetUp(self):  # noqa: N802
+        self.trsp_u, self.trsp_m, self.prot = await sd.ServiceDiscoveryProtocol.create_endpoints(
+            family=self.AF,
+            local_addr=self.bind_lo_addr,
+            multicast_addr=self.bind_mc_addr,
+            port=30490,
+            multicast_interface=self.bind_interface,
+        )
+
+    async def asyncTearDown(self):  # noqa: N802
+        self.trsp_u.close()
+        self.trsp_m.close()
+
+    async def test_endpoint_recv_unicast(self):
+        payload = b'\x40\x00\x00\x00' \
+            b'\x00\x00\x00\x30' \
+            b'\x06\x00\x00\x21\x88\x99\x66\x77\xEE\x20\x21\x22\x00\x00\x00\x10' \
+            b'\x01\x01\x01\x01\x55\x66\x77\x88\x99\x00\x00\x01\xde\xad\xbe\xef' \
+            b'\x01\x01\x01\x01\x55\x67\x77\x88\x99\x00\x00\x01\xde\xad\xbe\xef' \
+            b'\x00\x00\x00\x20' \
+            b'\x00\x09\x04\x00\x01\x02\x03\x04\x00\x11\x07\xff' \
+            b'\x00\x09\x04\x00\xfe\xfd\xfc\xfb\x00\x11\xff\xff' \
+            b'\x00\x05\x02\x00\x22\x22\x33\x33'
+
+        data = hdr.SOMEIPHeader(
+            service_id=hdr.SD_SERVICE,
+            method_id=hdr.SD_METHOD,
+            client_id=0,
+            session_id=1,
+            interface_version=hdr.SD_INTERFACE_VERSION,
+            message_type=hdr.SOMEIPMessageType.NOTIFICATION,
+            payload=payload,
+        ).build()
+
+        mock = unittest.mock.Mock()
+        self.prot.datagram_received = mock
+
+        ais = socket.getaddrinfo(self.send_addr, 30490,
+                                 self.AF, socket.SOCK_DGRAM, socket.IPPROTO_UDP,
+                                 flags=socket.AI_NUMERICHOST | socket.AI_NUMERICSERV)
+        dst_ai = ais[0]
+
+        sender_sock = socket.socket(self.AF, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        self._mc_sockopts(sender_sock)
+        try:
+            sender_sock.sendto(data, dst_ai[4])
+            await asyncio.sleep(.01)
+            sender_port = sender_sock.getsockname()[1]
+
+            ais = socket.getaddrinfo(self.sender_lo_addr, sender_port,
+                                     self.AF, socket.SOCK_DGRAM, socket.IPPROTO_UDP,
+                                     flags=(socket.AI_NUMERICHOST | socket.AI_NUMERICSERV
+                                            | socket.AI_PASSIVE))
+            src_ai = ais[0]
+
+            mock.assert_called_once_with(data, src_ai[4], multicast=False)
+        finally:
+            sender_sock.close()
+
+    async def test_endpoint_recv_multicast(self):
+        payload = b'\x40\x00\x00\x00' \
+            b'\x00\x00\x00\x30' \
+            b'\x06\x00\x00\x21\x88\x99\x66\x77\xEE\x20\x21\x22\x00\x00\x00\x10' \
+            b'\x01\x01\x01\x01\x55\x66\x77\x88\x99\x00\x00\x01\xde\xad\xbe\xef' \
+            b'\x01\x01\x01\x01\x55\x67\x77\x88\x99\x00\x00\x01\xde\xad\xbe\xef' \
+            b'\x00\x00\x00\x20' \
+            b'\x00\x09\x04\x00\x01\x02\x03\x04\x00\x11\x07\xff' \
+            b'\x00\x09\x04\x00\xfe\xfd\xfc\xfb\x00\x11\xff\xff' \
+            b'\x00\x05\x02\x00\x22\x22\x33\x33'
+
+        data = hdr.SOMEIPHeader(
+            service_id=hdr.SD_SERVICE,
+            method_id=hdr.SD_METHOD,
+            client_id=0,
+            session_id=1,
+            interface_version=hdr.SD_INTERFACE_VERSION,
+            message_type=hdr.SOMEIPMessageType.NOTIFICATION,
+            payload=payload,
+        ).build()
+
+        mock = unittest.mock.Mock()
+        self.prot.datagram_received = mock
+
+        ais = socket.getaddrinfo(self.send_mc_addr, 30490,
+                                 self.AF, socket.SOCK_DGRAM, socket.IPPROTO_UDP,
+                                 flags=socket.AI_NUMERICHOST | socket.AI_NUMERICSERV)
+        dst_ai = ais[0]
+
+        sender_sock = socket.socket(self.AF, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        self._mc_sockopts(sender_sock)
+        try:
+            sender_sock.sendto(data, dst_ai[4])
+            await asyncio.sleep(.01)
+            sender_port = sender_sock.getsockname()[1]
+
+            ais = socket.getaddrinfo(self.sender_lo_addr, sender_port,
+                                     self.AF, socket.SOCK_DGRAM, socket.IPPROTO_UDP,
+                                     flags=(socket.AI_NUMERICHOST | socket.AI_NUMERICSERV
+                                            | socket.AI_PASSIVE))
+            src_ai = ais[0]
+
+            mock.assert_called_once_with(data, src_ai[4], multicast=True)
+        finally:
+            sender_sock.close()
+
+
+class TestMulticastEndpointsV4(_MulticastEndpointsTest, unittest.IsolatedAsyncioTestCase):
+    bind_lo_addr = '127.0.0.1'
+    sender_lo_addr = '127.0.0.1'
+    send_addr = '127.0.0.1'
+    bind_mc_addr = '224.244.224.245'
+    send_mc_addr = '224.244.224.245'
+    bind_interface = 'lo'
+    AF = socket.AF_INET
+
+    def _mc_sockopts(self, sock: socket.socket) -> None:
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF,
+                        ipaddress.IPv4Address(self.sender_lo_addr).packed)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
+
+
+class TestMulticastEndpointsV6(_MulticastEndpointsTest, unittest.IsolatedAsyncioTestCase):
+    '''
+    required setup on Linux:
+
+        ip link add type veth
+        ip link set dev veth0 address 02:00:00:00:00:00
+        ip link set dev veth1 address 02:00:00:00:00:01
+        ip link set up dev veth0
+        ip link set up dev veth1
+    '''
+    bind_lo_addr = 'fe80::ff:fe00:0%veth0'
+    sender_lo_addr = 'fe80::ff:fe00:1%veth0'
+    send_addr = 'fe80::ff:fe00:0%veth1'
+    bind_mc_addr = 'ff02::dead:beef%veth0'
+    send_mc_addr = 'ff02::dead:beef%veth1'
+    bind_interface = 'veth0'
+    send_interface = 'veth1'
+    AF = socket.AF_INET6
+
+    def _mc_sockopts(self, sock: socket.socket) -> None:
+        ifindex = socket.if_nametoindex(self.send_interface)
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_IF,
+                        struct.pack('=i', ifindex))
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS, 1)
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_LOOP, 0)
 
 
 if __name__ == '__main__':
