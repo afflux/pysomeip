@@ -1,5 +1,6 @@
 import asyncio
 import collections
+import functools
 import ipaddress
 import logging
 import os
@@ -634,7 +635,7 @@ class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
             return [
                 service.create_find_entry()
                 for service in self.watched_services.keys()
-                if not self._service_found(service)
+                if not self._service_found(service)  # 4.2.1: SWS_SD_00365
             ]
 
         await asyncio.sleep(random.uniform(self.INITIAL_DELAY_MIN, self.INITIAL_DELAY_MAX))
@@ -747,10 +748,12 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
         self._can_answer_offers = False
         self._last_multicast_offer: float = 0
 
-        self.announcing_services: typing.Set[someip.config.Service] = set()
+        self.announcing_services: typing.List[someip.config.Service] = []
 
     def announce_service(self, service: someip.config.Service) -> None:
-        self.announcing_services.add(service)
+        # FIXME changing the announced services without going through startup behavior is
+        # not compliant to 4.2.1: 6.7.5    Service Discovery Communication Behavior
+        self.announcing_services.append(service)
 
     def sd_message_received(self, sdhdr: someip.header.SOMEIPSDHeader,
                             addr: _T_SOCKADDR, multicast: bool) -> None:
@@ -814,21 +817,24 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
             self._send_offers(local_services, remote=addr)
 
     def start(self, loop=None):
-        if self.task is not None or self.alive:
+        if self.task is not None and not self.task.done():  # pragma: nocover
             return
         if loop is None:  # pragma: nobranch
             loop = asyncio.get_event_loop()
 
-        self.alive = True
         self._can_answer_offers = False
         self.task = loop.create_task(self._announce())
 
     def stop(self):
-        self.alive = False
-
-        if self.task:
+        if self.task:  # pragma: nobranch
             self.task.cancel()
+            asyncio.create_task(wait_cancelled(self.task))
             self.task = None
+
+            if not self.CYCLIC_OFFER_DELAY:
+                asyncio.get_event_loop().call_soon(
+                    functools.partial(self._send_offers, self.announcing_services, stop=True),
+                )
 
     def connection_lost(self, exc: typing.Optional[Exception]) -> None:
         log = self.log.exception if exc else self.log.info
@@ -838,26 +844,31 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
     @log_exceptions()
     async def _announce(self) -> None:
         try:
+            if self.TTL is not TTL_FOREVER and \
+                    (not self.CYCLIC_OFFER_DELAY or self.CYCLIC_OFFER_DELAY >= self.TTL):
+                self.log.warning('CYCLIC_OFFER_DELAY=%r too short for TTL=%r.'
+                                 ' expect connectivity issues', self.CYCLIC_OFFER_DELAY, self.TTL)
             await asyncio.sleep(random.uniform(self.INITIAL_DELAY_MIN, self.INITIAL_DELAY_MAX))
             self._send_offers(self.announcing_services)
 
-            self._can_answer_offers = True
-            for i in range(self.REPETITIONS_MAX):
-                await asyncio.sleep((2**i) * self.REPETITIONS_BASE_DELAY)
-                if not self.alive:
+            try:
+                self._can_answer_offers = True
+                for i in range(self.REPETITIONS_MAX):
+                    await asyncio.sleep((2**i) * self.REPETITIONS_BASE_DELAY)
+                    self._send_offers(self.announcing_services)
+
+                if not self.CYCLIC_OFFER_DELAY:  # 4.2.1 SWS_SD_00451
                     return
-                self._send_offers(self.announcing_services)
 
-            if not self.CYCLIC_OFFER_DELAY:  # SWS_SD_00451
-                return
-
-            while self.alive:
-                await asyncio.sleep(self.CYCLIC_OFFER_DELAY)
-                self._send_offers(self.announcing_services)
+                while True:
+                    # 4.2.1 SWS_SD_00450
+                    await asyncio.sleep(self.CYCLIC_OFFER_DELAY)
+                    self._send_offers(self.announcing_services)
+            finally:
+                if self.CYCLIC_OFFER_DELAY:
+                    self._send_offers(self.announcing_services, stop=True)
         except asyncio.CancelledError:
             pass
-        finally:
-            self._send_offers(self.announcing_services, stop=True)
 
     def _send_offers(self, services: typing.Collection[someip.config.Service],
                      remote: _T_OPT_SOCKADDR = None,
