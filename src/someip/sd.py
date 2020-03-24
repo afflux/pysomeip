@@ -630,17 +630,26 @@ class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
         if not self.watched_services:
             return
 
-        await asyncio.sleep(random.uniform(self.INITIAL_DELAY_MIN, self.INITIAL_DELAY_MAX))
-
-        for i in range(self.REPETITIONS_MAX):
-            self.send_sd([
+        def _build_entries():
+            return [
                 service.create_find_entry()
                 for service in self.watched_services.keys()
                 if not self._service_found(service)
-            ])
+            ]
 
-            if i != self.REPETITIONS_MAX - 1:
-                await asyncio.sleep((2**i) * self.REPETITIONS_BASE_DELAY)
+        await asyncio.sleep(random.uniform(self.INITIAL_DELAY_MIN, self.INITIAL_DELAY_MAX))
+        find_entries = _build_entries()
+        if not find_entries:
+            return
+        self.send_sd(find_entries)  # 4.2.1: SWS_SD_00353
+
+        for i in range(self.REPETITIONS_MAX):
+            await asyncio.sleep((2**i) * self.REPETITIONS_BASE_DELAY)  # 4.2.1: SWS_SD_00363
+
+            find_entries = _build_entries()
+            if not find_entries:
+                return
+            self.send_sd(find_entries)  # 4.2.1: SWS_SD_00457
 
     def service_offered(self, addr: _T_SOCKADDR, entry: someip.header.SOMEIPSDEntry):
         service = someip.config.Service.from_offer_entry(entry)

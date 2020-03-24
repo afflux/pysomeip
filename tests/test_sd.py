@@ -696,6 +696,8 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase):
         find_5566_2 = bytes(find_5566)
         find_5566[11] = 3
         find_5566_3 = bytes(find_5566)
+        find_5566[11] = 4
+        find_5566_4 = bytes(find_5566)
 
         self.assertEqual(
             self.prot.transport.sendto.call_args_list,
@@ -703,6 +705,7 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase):
                 unittest.mock.call(find_5566_1, self.multi_addr),
                 unittest.mock.call(find_5566_2, self.multi_addr),
                 unittest.mock.call(find_5566_3, self.multi_addr),
+                unittest.mock.call(find_5566_4, self.multi_addr),
             ],
         )
 
@@ -710,6 +713,7 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(tdiffs[0], 0.2, places=1)
         self.assertAlmostEqual(tdiffs[1], 0.3, places=1)
         self.assertAlmostEqual(tdiffs[2], 0.5, places=1)
+        self.assertAlmostEqual(tdiffs[3], 0.9, places=1)
 
     async def test_send_no_finds_early_offer(self):
         mock = unittest.mock.Mock()
@@ -784,6 +788,8 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase):
         find_5566_2 = bytes(find_5566)
         find_5566[11] = 3
         find_5566_3 = bytes(find_5566)
+        find_5566[11] = 4
+        find_5566_4 = bytes(find_5566)
 
         self.assertEqual(
             self.prot.transport.sendto.call_args_list,
@@ -791,6 +797,7 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase):
                 unittest.mock.call(find_5566_1, self.multi_addr),
                 unittest.mock.call(find_5566_2, self.multi_addr),
                 unittest.mock.call(find_5566_3, self.multi_addr),
+                unittest.mock.call(find_5566_4, self.multi_addr),
             ],
         )
 
@@ -798,6 +805,7 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(tdiffs[0], 0.2, places=1)
         self.assertAlmostEqual(tdiffs[1], 0.3, places=1)
         self.assertAlmostEqual(tdiffs[2], 0.5, places=1)
+        self.assertAlmostEqual(tdiffs[3], 0.9, places=1)
 
 
 class TestEventgroup(unittest.IsolatedAsyncioTestCase):
