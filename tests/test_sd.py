@@ -1,3 +1,4 @@
+# vim:foldmethod=marker:foldlevel=0
 import asyncio
 import ipaddress
 import itertools
@@ -132,6 +133,14 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
             if i % 64 == 0:
                 # yield to event loop every couple iterations
                 await asyncio.sleep(0)
+
+    async def test_no_send_empty_sd(self):
+        prot = sd.SOMEIPDatagramProtocol()
+        _mock = prot.transport = unittest.mock.Mock()
+
+        prot.send_sd([])
+
+        _mock.assert_not_called()
 
     async def test_offer_start(self):
         prot = sd.ServiceDiscoveryProtocol(self.multi_addr)
@@ -360,7 +369,8 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
             )
 
 
-class _BaseSDTest(unittest.IsolatedAsyncioTestCase):
+# {{{ ServiceDiscovery OfferService
+class _BaseSDDiscoveryTest(unittest.IsolatedAsyncioTestCase):
     multi_addr = ('2001:db8::1', 30490, 0, 0)
     fake_addr = ('2001:db8::2', 30490, 0, 0)
     TTL = sd.TTL_FOREVER
@@ -419,7 +429,7 @@ class _BaseSDTest(unittest.IsolatedAsyncioTestCase):
         self.mock_single.reset_mock()
 
 
-class TestSDTTLForever(_BaseSDTest):
+class TestSDTTLForever(_BaseSDDiscoveryTest):
     TTL = sd.TTL_FOREVER
 
     async def test_sd_reboot_ttl_forever(self):
@@ -515,7 +525,7 @@ class TestSDTTLForever(_BaseSDTest):
         self.mock_single.reset_mock()
 
 
-class TestSDTTL1(_BaseSDTest):
+class TestSDTTL1(_BaseSDDiscoveryTest):
     TTL = 1
 
     async def test_sd_disconnect(self):
@@ -655,8 +665,10 @@ class TestSDTTL1(_BaseSDTest):
         self.mock_single.service_offered.assert_not_called()
         self.mock.service_stopped.assert_not_called()
         self.mock_single.service_stopped.assert_not_called()
+# }}}
 
 
+# {{{ ServiceDiscovery FindService
 class TestSDFind(unittest.IsolatedAsyncioTestCase):
     multi_addr = ('2001:db8::1', 30490, 0, 0)
     fake_addr = ('2001:db8::2', 30490, 0, 0)
@@ -806,9 +818,11 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(tdiffs[1], 0.3, places=1)
         self.assertAlmostEqual(tdiffs[2], 0.5, places=1)
         self.assertAlmostEqual(tdiffs[3], 0.9, places=1)
+# }}}
 
 
-class TestEventgroup(unittest.IsolatedAsyncioTestCase):
+# {{{ SubscriptionProtocol Eventgroup subscribe / stop subscribe
+class TestSubscribeEventgroup(unittest.IsolatedAsyncioTestCase):
     local_addr = ('2001:db8::ff', 30331, 0, 0)
     remote1_addr = ('2001:db8::1', 30332, 0, 0)
     remote2_addr = ('2001:db8::2', 30337, 0, 0)
@@ -840,7 +854,7 @@ class TestEventgroup(unittest.IsolatedAsyncioTestCase):
         self._mock_sendto = self.prot.transport.sendto
 
 
-class TestEventgroupTTL3(TestEventgroup):
+class TestSubscribeEventgroupTTL3(TestSubscribeEventgroup):
     TTL = 3
     REFRESH_INTERVAL = 1
 
@@ -928,7 +942,7 @@ class TestEventgroupTTL3(TestEventgroup):
         self._mock_sendto.reset_mock()
 
 
-class TestEventgroupTTLForever(TestEventgroup):
+class TestSubscribeEventgroupTTLForever(TestSubscribeEventgroup):
     TTL = None
     REFRESH_INTERVAL = None
 
@@ -992,8 +1006,10 @@ class TestEventgroupTTLForever(TestEventgroup):
         await asyncio.sleep(0)
 
         self._mock_sendto.assert_not_called()
+# }}}
 
 
+# {{{ _BaseMulticastSDProtocol multicast endpoints
 class _MulticastEndpointsTest:
     maxDiff = None
     AF: socket.AddressFamily
@@ -1153,6 +1169,7 @@ class TestMulticastEndpointsV6(_MulticastEndpointsTest, unittest.IsolatedAsyncio
                         struct.pack('=i', ifindex))
         sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS, 1)
         sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_LOOP, 0)
+# }}}
 
 
 if __name__ == '__main__':
