@@ -1009,6 +1009,157 @@ class TestSubscribeEventgroupTTLForever(TestSubscribeEventgroup):
 # }}}
 
 
+# {{{ ServiceAnnounceProtocol
+class TestSDAnnounce(unittest.IsolatedAsyncioTestCase):
+    multi_addr = ('2001:db8::1', 30490, 0, 0)
+    fake_addr = ('2001:db8::2', 30490, 0, 0)
+    TTL = sd.TTL_FOREVER
+
+    async def asyncSetUp(self):  # noqa: N802
+        self.prot = sd.ServiceAnnounceProtocol(self.multi_addr)
+
+        self.ep_1 = hdr.IPv4EndpointOption(
+            address=ipaddress.IPv4Address('254.253.252.251'),
+            l4proto=hdr.L4Protocols.UDP,
+            port=30335,
+        )
+
+        self.ep_2 = hdr.IPv4EndpointOption(
+            address=ipaddress.IPv6Address('2001:db8::abcd:f00b'),
+            l4proto=hdr.L4Protocols.TCP,
+            port=30330,
+        )
+
+        self.cfg_service_5566 = cfg.Service(
+            service_id=0x5566,
+            instance_id=0x7788,
+            major_version=12,
+            minor_version=345,
+            options_1=(self.ep_1,),
+        )
+
+        self.cfg_service_2233 = cfg.Service(
+            service_id=0x2233,
+            instance_id=0x0001,
+            major_version=1,
+            minor_version=0,
+            options_1=(self.ep_2,),
+        )
+
+        self.prot.announce_service(self.cfg_service_5566)
+        self.prot.announce_service(self.cfg_service_2233)
+
+        self.send_times = []
+
+        def _mock_send_sd(*args, **kwargs):
+            self.send_times.append(asyncio.get_running_loop().time())
+            return unittest.mock.DEFAULT
+
+        self.mock = unittest.mock.Mock()
+        self.mock.side_effect = _mock_send_sd
+        self.prot.send_sd = self.mock
+        self.t_start = asyncio.get_running_loop().time()
+
+    async def test_announce_non_cyclic(self):
+        self.prot.INITIAL_DELAY_MIN = 0.1
+        self.prot.INITIAL_DELAY_MAX = 0.1
+        self.prot.REPETITIONS_MAX = 2
+        self.prot.REPETITIONS_BASE_DELAY = 0.1
+        self.prot.CYCLIC_OFFER_DELAY = 0
+
+        self.prot.log = unittest.mock.Mock()
+
+        self.prot.start()
+        await asyncio.sleep(1.3)
+        self.prot.stop()
+
+        self.assertEqual(
+            self.prot.send_sd.call_args_list,
+            [
+                unittest.mock.call([self.cfg_service_5566.create_offer_entry(3),
+                                    self.cfg_service_2233.create_offer_entry(3)], remote=None),
+            ] * 3,
+        )
+
+        tdiffs = [t - self.t_start for t in self.send_times]
+        self.assertAlmostEqual(tdiffs[0], 0.1, places=1)
+        self.assertAlmostEqual(tdiffs[1], 0.2, places=1)
+        self.assertAlmostEqual(tdiffs[2], 0.4, places=1)
+
+        self.prot.send_sd.reset_mock()
+        self.send_times.clear()
+
+        await asyncio.sleep(0.001)
+        self.prot.send_sd.assert_called_once_with([
+            self.cfg_service_5566.create_offer_entry(0),
+            self.cfg_service_2233.create_offer_entry(0),
+        ], remote=None)
+
+        self.prot.log.warning.assert_called_once()
+        self.prot.log.error.assert_not_called()
+        self.prot.log.exception.assert_not_called()
+
+    async def test_announce_cyclic(self):
+        self.prot.INITIAL_DELAY_MIN = 0.1
+        self.prot.INITIAL_DELAY_MAX = 0.1
+        self.prot.REPETITIONS_MAX = 3
+        self.prot.REPETITIONS_BASE_DELAY = 0.1
+        self.prot.CYCLIC_OFFER_DELAY = 0.2
+
+        self.prot.log = unittest.mock.Mock()
+
+        self.prot.start()
+        await asyncio.sleep(1.3)
+        self.prot.stop()
+
+        self.assertEqual(
+            self.prot.send_sd.call_args_list,
+            [
+                unittest.mock.call([self.cfg_service_5566.create_offer_entry(3),
+                                    self.cfg_service_2233.create_offer_entry(3)], remote=None),
+            ] * 6,
+        )
+
+        tdiffs = [t - self.t_start for t in self.send_times]
+        self.assertAlmostEqual(tdiffs[0], 0.1, places=1)
+        self.assertAlmostEqual(tdiffs[1], 0.2, places=1)
+        self.assertAlmostEqual(tdiffs[2], 0.4, places=1)
+        self.assertAlmostEqual(tdiffs[3], 0.8, places=1)
+        self.assertAlmostEqual(tdiffs[4], 1.0, places=1)
+        self.assertAlmostEqual(tdiffs[5], 1.2, places=1)
+
+        self.prot.send_sd.reset_mock()
+        self.send_times.clear()
+
+        await asyncio.sleep(0.001)
+        self.prot.send_sd.assert_called_once_with([
+            self.cfg_service_5566.create_offer_entry(0),
+            self.cfg_service_2233.create_offer_entry(0),
+        ], remote=None)
+
+        self.prot.log.warning.assert_not_called()
+        self.prot.log.error.assert_not_called()
+        self.prot.log.exception.assert_not_called()
+
+    async def test_announce_stop_initial(self):
+        self.prot.INITIAL_DELAY_MIN = 0.1
+        self.prot.INITIAL_DELAY_MAX = 0.1
+        self.prot.REPETITIONS_MAX = 3
+        self.prot.REPETITIONS_BASE_DELAY = 0.1
+        self.prot.CYCLIC_OFFER_DELAY = 0.2
+
+        self.prot.start()
+        # sleep until just before end of initial wait phase
+        await asyncio.sleep(0.09)
+        self.prot.stop()
+
+        await asyncio.sleep(0.001)
+
+        self.prot.send_sd.assert_not_called()
+    # TODO add tests for FindService behavior
+# }}}
+
+
 # {{{ _BaseMulticastSDProtocol multicast endpoints
 class _MulticastEndpointsTest:
     maxDiff = None
