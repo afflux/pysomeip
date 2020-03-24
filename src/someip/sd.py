@@ -115,7 +115,8 @@ class SOMEIPDatagramProtocol:
         self.log.exception('someip event listener protocol failed', exc_info=exc)
 
     def connection_lost(self, exc: typing.Optional[Exception]) -> None:  # pragma: nocover
-        self.log.exception('someip closed', exc_info=exc)
+        log = self.log.exception if exc else self.log.info
+        log('someip closed', exc_info=exc)
 
     def message_received(self,
                          someip_message: someip.header.SOMEIPHeader,
@@ -378,7 +379,8 @@ class SubscriptionProtocol(_BaseSDProtocol):
         return endpoint_entries
 
     def connection_lost(self, exc: typing.Optional[Exception]) -> None:
-        self.log.exception('connection lost. stopping subscribe task', exc_info=exc)
+        log = self.log.exception if exc else self.log.info
+        log('connection lost. stopping subscribe task', exc_info=exc)
         self.stop(send_stop_subscribe=False)
 
     @log_exceptions()
@@ -663,7 +665,8 @@ class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
         self.found_services[addr][service] = timeout_handle
 
     def connection_lost(self, exc: typing.Optional[Exception]) -> None:
-        self.log.exception('connection lost. stopping service_timeout tasks', exc_info=exc)
+        log = self.log.exception if exc else self.log.info
+        log('connection lost. stopping service_timeout tasks', exc_info=exc)
 
         for services in self.found_services.values():
             for service, handle in services.items():
@@ -819,7 +822,8 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
             self.task = None
 
     def connection_lost(self, exc: typing.Optional[Exception]) -> None:
-        self.log.exception('connection lost. stopping announce task', exc_info=exc)
+        log = self.log.exception if exc else self.log.info
+        log('connection lost. stopping announce task', exc_info=exc)
         self.stop()
 
     @log_exceptions()
