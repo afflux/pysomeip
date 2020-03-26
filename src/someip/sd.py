@@ -11,8 +11,6 @@ import struct
 import threading
 import typing
 
-import netifaces  # type: ignore[import]
-
 import someip.header
 import someip.config
 from someip.config import _T_SOCKNAME as _T_SOCKADDR
@@ -40,23 +38,6 @@ def pack_addr_v4(a):
 
 def pack_addr_v6(a):
     return socket.inet_pton(socket.AF_INET6, a.split('%', 1)[0])
-
-
-def _addr_to_ifindex(addr: _T_IPADDR) -> typing.Optional[int]:
-    if isinstance(addr, ipaddress.IPv4Address):
-        family = netifaces.AF_INET
-    elif isinstance(addr, ipaddress.IPv6Address):
-        family = netifaces.AF_INET6
-    else:
-        raise ValueError('required IPv4Address or IPv6Address')
-
-    for ifindex, ifname in socket.if_nameindex():
-        for if_addr in netifaces.ifaddresses(ifname).get(family, []):
-            if_ip = ip_address(if_addr['addr'])
-            if addr == if_ip:
-                return ifindex
-
-    return None
 
 
 class SOMEIPDatagramProtocol:
@@ -788,8 +769,8 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
                                   unicast_supported: bool) -> None:
         if not self._can_answer_offers:
             # 4.2.1 SWS_SD_00319
-            LOG.info('ignoring FindService from %s during Initial Wait Phase: %s',
-                     self.format_address(addr), entry)
+            self.log.info('ignoring FindService from %s during Initial Wait Phase: %s',
+                          self.format_address(addr), entry)
             return
 
         local_services = [s for s in self.announcing_services if s.matches_find(entry)]
