@@ -19,9 +19,9 @@ source = [
 ]
 
 [tool.coverage.report]
-partial_branches = [
-    ':\s*\.\.\.',
-    '#\s*(pragma|PRAGMA)[:\s]?\s*(no|NO)\s*(branch|BRANCH)',
+exclude_lines = [
+    '^\s*\.\.\.\s*(#|$)',
+    '#\s*(pragma|PRAGMA)[:\s]?\s*(no|NO)\s*(cover|COVER)'
 ]
 
 [tool.black]
