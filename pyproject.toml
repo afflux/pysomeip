@@ -23,3 +23,9 @@ partial_branches = [
     ':\s*\.\.\.',
     '#\s*(pragma|PRAGMA)[:\s]?\s*(no|NO)\s*(branch|BRANCH)',
 ]
+
+[tool.black]
+target_version = [
+    'py38',
+    'py37',
+]
