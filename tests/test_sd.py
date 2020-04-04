@@ -226,6 +226,7 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
                             ),
                         ),
                     ),
+                    self.fake_addr,
                 )
             ],
         )
@@ -460,12 +461,14 @@ class _BaseSDDiscoveryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             self.mock.service_offered.call_args_list,
             [
-                unittest.mock.call(self.cfg_offer_5566),
-                unittest.mock.call(self.cfg_offer_5567),
+                unittest.mock.call(self.cfg_offer_5566, self.fake_addr),
+                unittest.mock.call(self.cfg_offer_5567, self.fake_addr),
             ],
         )
 
-        self.mock_single.service_offered.assert_called_once_with(self.cfg_offer_5566)
+        self.mock_single.service_offered.assert_called_once_with(
+            self.cfg_offer_5566, self.fake_addr
+        )
         self.mock.service_stopped.assert_not_called()
         self.mock_single.service_stopped.assert_not_called()
 
@@ -522,14 +525,13 @@ class TestSDTTLForever(_BaseSDDiscoveryTest):
         self.assertEqual(
             mock.service_offered.call_args_list,
             [
-                unittest.mock.call(self.cfg_offer_5566),
-                unittest.mock.call(self.cfg_offer_5567),
+                unittest.mock.call(self.cfg_offer_5566, self.fake_addr),
+                unittest.mock.call(self.cfg_offer_5567, self.fake_addr),
             ],
         )
 
-        self.assertEqual(
-            mock_single.service_offered.call_args_list,
-            [unittest.mock.call(self.cfg_offer_5566),],
+        self.mock_single.service_offered.assert_called_once_with(
+            self.cfg_offer_5566, self.fake_addr
         )
         self.assertEqual(
             mock.service_stopped.call_args_list,
@@ -607,12 +609,14 @@ class TestSDTTL1(_BaseSDDiscoveryTest):
         self.assertEqual(
             self.mock.service_offered.call_args_list,
             [
-                unittest.mock.call(self.cfg_offer_5566),
-                unittest.mock.call(self.cfg_offer_5567),
+                unittest.mock.call(self.cfg_offer_5566, self.fake_addr),
+                unittest.mock.call(self.cfg_offer_5567, self.fake_addr),
             ],
         )
 
-        self.mock_single.service_offered.assert_called_once_with(self.cfg_offer_5566)
+        self.mock_single.service_offered.assert_called_once_with(
+            self.cfg_offer_5566, self.fake_addr
+        )
 
         self.assertEqual(
             self.mock.service_stopped.call_args_list,
@@ -678,12 +682,14 @@ class TestSDTTL1(_BaseSDDiscoveryTest):
         self.assertEqual(
             self.mock.service_offered.call_args_list,
             [
-                unittest.mock.call(self.cfg_offer_5566),
-                unittest.mock.call(self.cfg_offer_5567),
+                unittest.mock.call(self.cfg_offer_5566, self.fake_addr),
+                unittest.mock.call(self.cfg_offer_5567, self.fake_addr),
             ],
         )
 
-        self.mock_single.service_offered.assert_called_once_with(self.cfg_offer_5566)
+        self.mock_single.service_offered.assert_called_once_with(
+            self.cfg_offer_5566, self.fake_addr
+        )
         self.mock.service_stopped.assert_not_called()
         self.mock_single.service_stopped.assert_not_called()
 
@@ -717,7 +723,9 @@ class TestSDTTL1(_BaseSDDiscoveryTest):
         )
         await asyncio.sleep(0)
 
-        self.mock.service_offered.assert_called_once_with(self.cfg_offer_5567)
+        self.mock.service_offered.assert_called_once_with(
+            self.cfg_offer_5567, self.fake_addr
+        )
         self.mock_single.service_offered.assert_not_called()
         self.mock.service_stopped.assert_not_called()
         self.mock_single.service_stopped.assert_not_called()
@@ -905,6 +913,87 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase, _SendTiming):
             (0.3, unittest.mock.call(find_5566_2, self.multi_addr)),
             (0.5, unittest.mock.call(find_5566_3, self.multi_addr)),
             (0.9, unittest.mock.call(find_5566_4, self.multi_addr)),
+        )
+
+    async def test_find_subscribe(self):
+        local_addr = ("2001:db8::1111", 3333, 0, 0)
+
+        self.prot.find_subscribe_eventgroup(
+            cfg.Eventgroup(
+                service_id=0x5566,
+                instance_id=0xFFFF,
+                major_version=0xFF,
+                eventgroup_id=0x0000AAAA,
+                sockname=local_addr,
+                protocol=hdr.L4Protocols.UDP,
+            )
+        )
+
+        t = asyncio.create_task(self.prot.send_find_services())
+
+        await asyncio.sleep(0.25)
+
+        data = pack_sd(
+            [
+                hdr.SOMEIPSDEntry(
+                    sd_type=hdr.SOMEIPSDEntryType.OfferService,
+                    service_id=0x5566,
+                    instance_id=0x7788,
+                    major_version=1,
+                    ttl=1,
+                    minver_or_counter=0xDEADBEEF,
+                    options_1=(
+                        hdr.IPv4EndpointOption(
+                            address=ipaddress.IPv4Address("254.253.252.251"),
+                            l4proto=hdr.L4Protocols.UDP,
+                            port=65535,
+                        ),
+                    ),
+                )
+            ]
+        )
+
+        self.prot.datagram_received(data, self.fake_addr, multicast=True)
+
+        await t
+
+        find = pack_sd(
+            [
+                hdr.SOMEIPSDEntry(
+                    sd_type=hdr.SOMEIPSDEntryType.FindService,
+                    service_id=0x5566,
+                    instance_id=0xFFFF,
+                    major_version=0xFF,
+                    ttl=3,
+                    minver_or_counter=0xFFFFFFFF,
+                )
+            ],
+            session_id=1,
+        )
+        subscribe = pack_sd(
+            [
+                hdr.SOMEIPSDEntry(
+                    sd_type=hdr.SOMEIPSDEntryType.Subscribe,
+                    service_id=0x5566,
+                    instance_id=0x7788,
+                    major_version=1,
+                    ttl=3,
+                    minver_or_counter=0x0000AAAA,
+                    options_1=(
+                        hdr.IPv6EndpointOption(
+                            address=ipaddress.IPv6Address(local_addr[0]),
+                            l4proto=hdr.L4Protocols.UDP,
+                            port=local_addr[1],
+                        ),
+                    ),
+                )
+            ],
+            session_id=1,
+        )
+
+        self.assertTiming(
+            (0.2, unittest.mock.call(find, self.multi_addr)),
+            (0.25, unittest.mock.call(subscribe, self.fake_addr)),
         )
 
 

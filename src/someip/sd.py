@@ -319,7 +319,7 @@ class SubscriptionProtocol(_BaseSDProtocol):
         self.alive = False
 
         self.subscribeentries: typing.List[
-            typing.Tuple[someip.config.Eventgroup, _T_SOCKADDR,]
+            typing.Tuple[someip.config.Eventgroup, _T_SOCKADDR],
         ] = []
 
     def subscribe_eventgroup(
@@ -650,11 +650,34 @@ class _BaseMulticastSDProtocol(_BaseSDProtocol):
 
 
 class ServiceListener:
-    def service_offered(self, service: someip.config.Service) -> None:
+    def service_offered(
+        self, service: someip.config.Service, source: _T_SOCKADDR
+    ) -> None:
         ...
 
     def service_stopped(self, service: someip.config.Service) -> None:
         ...
+
+
+class AutoSubscribeServiceListener(ServiceListener):
+    def __init__(
+        self, protocol: SOMEIPDatagramProtocol, eventgroup: someip.config.Eventgroup, ttl=3
+    ):
+        self.protocol = protocol
+        self.eventgroup = eventgroup
+        self.ttl = ttl
+
+    def service_offered(
+        self, service: someip.config.Service, source: _T_SOCKADDR
+    ) -> None:
+        eventgroup = self.eventgroup.for_service(service)
+        if not eventgroup:
+            return
+        self.protocol.send_sd([eventgroup.create_subscribe_entry(self.ttl)], source)
+
+    def service_stopped(self, service: someip.config.Service) -> None:
+        # TODO do I need to react?
+        pass
 
 
 class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
@@ -771,7 +794,7 @@ class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
                 old_timeout_handle.cancel()
         except KeyError:
             # new service
-            self._notify_service_offered(service)
+            self._notify_service_offered(service, addr)
 
         self.found_services[addr][service] = timeout_handle
 
@@ -828,13 +851,15 @@ class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
             self._notify_service_stopped(service)
         self.found_services[addr].clear()
 
-    def _notify_service_offered(self, service: someip.config.Service) -> None:
+    def _notify_service_offered(
+        self, service: someip.config.Service, source: _T_SOCKADDR
+    ) -> None:
         for service_filter, listeners in self.watched_services.items():
             if service_filter.matches_service(service):
                 for listener in listeners:
-                    listener.service_offered(service)
+                    listener.service_offered(service, source)
         for listener in self.watcher_all_services:
-            listener.service_offered(service)
+            listener.service_offered(service, source)
 
     def _notify_service_stopped(self, service: someip.config.Service) -> None:
         for service_filter, listeners in self.watched_services.items():
@@ -843,6 +868,11 @@ class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
                     listener.service_stopped(service)
         for listener in self.watcher_all_services:
             listener.service_stopped(service)
+
+    def find_subscribe_eventgroup(self, eventgroup: someip.config.Eventgroup):
+        self.watch_service(
+            eventgroup.as_service(), AutoSubscribeServiceListener(self, eventgroup)
+        )
 
 
 class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):

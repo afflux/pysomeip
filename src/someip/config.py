@@ -35,6 +35,22 @@ class Eventgroup:
             options_1=(endpoint_option,),
         )
 
+    def for_service(self, service: Service) -> typing.Optional[Eventgroup]:
+        if not self.as_service().matches_offer(service.create_offer_entry()):
+            return None
+        return dataclasses.replace(
+            self,
+            instance_id=service.instance_id,
+            major_version=service.major_version,
+        )
+
+    def as_service(self):
+        return Service(
+            service_id=self.service_id,
+            instance_id=self.instance_id,
+            major_version=self.major_version,
+        )
+
     @staticmethod
     def _sockaddr_to_endpoint(
         sockname: _T_SOCKNAME, protocol: someip.header.L4Protocols
