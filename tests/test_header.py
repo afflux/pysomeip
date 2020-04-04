@@ -2,15 +2,17 @@ import asyncio
 import ipaddress
 import logging
 import unittest
+import socket
 from dataclasses import replace
 
 import someip.header as hdr
 
 logging.captureWarnings(True)
 logging.basicConfig(level=logging.DEBUG)
+logging.getLogger("asyncio").setLevel(logging.INFO)
 
 
-class TestHeader(unittest.TestCase):
+class TestHeader(unittest.IsolatedAsyncioTestCase):
     def _check(self, payload, obj, parser, extra=b""):
         result = parser(payload + extra)
         self.assertEqual(result[1], extra)
@@ -109,56 +111,52 @@ class TestHeader(unittest.TestCase):
         with self.assertRaises(hdr.ParseError):
             hdr.SOMEIPHeader.parse(payload)
 
-    def test_someip_stream_async(self):
-        loop = asyncio.new_event_loop()
-        try:
-            bytes_reader = asyncio.StreamReader(loop=loop)
-            someip_reader = hdr.SOMEIPReader(bytes_reader)
+    async def test_someip_stream_async(self):
+        bytes_reader = asyncio.StreamReader()
+        someip_reader = hdr.SOMEIPReader(bytes_reader)
 
-            async def consume(reader):
-                return await reader.read()
+        async def consume(reader):
+            return await reader.read()
 
-            bytes_reader.feed_data(b"\xde\xad\xbe\xef")
-            bytes_reader.feed_data(b"\x00\x00")
-            bytes_reader.feed_data(b"\x00\x08\xcc\xcc")
-            bytes_reader.feed_data(b"\xdd\xdd\x01\x02\x40\x04")
-            bytes_reader.feed_data(
-                b"\xde\xad\xbe\xef\x00\x00\x00\x0a" b"\xcc\xcc\xdd\xdd\x01\x02\x40\x04"
-            )
+        bytes_reader.feed_data(b"\xde\xad\xbe\xef")
+        bytes_reader.feed_data(b"\x00\x00")
+        bytes_reader.feed_data(b"\x00\x08\xcc\xcc")
+        bytes_reader.feed_data(b"\xdd\xdd\x01\x02\x40\x04")
+        bytes_reader.feed_data(
+            b"\xde\xad\xbe\xef\x00\x00\x00\x0a" b"\xcc\xcc\xdd\xdd\x01\x02\x40\x04"
+        )
 
-            parsed = loop.run_until_complete(consume(someip_reader))
+        parsed = await someip_reader.read()
 
-            message = hdr.SOMEIPHeader(
-                service_id=0xDEAD,
-                method_id=0xBEEF,
-                client_id=0xCCCC,
-                session_id=0xDDDD,
-                protocol_version=1,
-                interface_version=2,
-                message_type=hdr.SOMEIPMessageType.REQUEST_ACK,
-                return_code=hdr.SOMEIPReturnCode.E_NOT_READY,
-            )
-            self.assertEqual(parsed, message)
+        message = hdr.SOMEIPHeader(
+            service_id=0xDEAD,
+            method_id=0xBEEF,
+            client_id=0xCCCC,
+            session_id=0xDDDD,
+            protocol_version=1,
+            interface_version=2,
+            message_type=hdr.SOMEIPMessageType.REQUEST_ACK,
+            return_code=hdr.SOMEIPReturnCode.E_NOT_READY,
+        )
+        self.assertEqual(parsed, message)
 
-            bytes_reader.feed_data(b"\xaa\x55")
-            bytes_reader.feed_eof()
+        bytes_reader.feed_data(b"\xaa\x55")
+        bytes_reader.feed_eof()
 
-            parsed = loop.run_until_complete(consume(someip_reader))
-            message = hdr.SOMEIPHeader(
-                service_id=0xDEAD,
-                method_id=0xBEEF,
-                client_id=0xCCCC,
-                session_id=0xDDDD,
-                protocol_version=1,
-                interface_version=2,
-                message_type=hdr.SOMEIPMessageType.REQUEST_ACK,
-                return_code=hdr.SOMEIPReturnCode.E_NOT_READY,
-                payload=b"\xaa\x55",
-            )
-            self.assertEqual(parsed, message)
-            self.assertTrue(someip_reader.at_eof())
-        finally:
-            loop.close()
+        parsed = await someip_reader.read()
+        message = hdr.SOMEIPHeader(
+            service_id=0xDEAD,
+            method_id=0xBEEF,
+            client_id=0xCCCC,
+            session_id=0xDDDD,
+            protocol_version=1,
+            interface_version=2,
+            message_type=hdr.SOMEIPMessageType.REQUEST_ACK,
+            return_code=hdr.SOMEIPReturnCode.E_NOT_READY,
+            payload=b"\xaa\x55",
+        )
+        self.assertEqual(parsed, message)
+        self.assertTrue(someip_reader.at_eof())
 
     def test_sdentry_service(self):
         payload = b"\x00\xAA\xBB\xCD\x88\x99\x66\x77\xEE\x20\x21\x22\x10\x11\x12\x13"
@@ -310,7 +308,7 @@ class TestHeader(unittest.TestCase):
         with self.assertRaises(hdr.ParseError):
             hdr.SOMEIPSDOption.parse(b"\x00\x04\x02\x00\x12\x34\x56")
 
-    def test_sdoption_ipv4(self):
+    async def test_sdoption_ipv4(self):
         payload = b"\x00\x09\x04\x00\x01\x02\xfe\xff\x00\x06\x03\xff"
         option = hdr.IPv4EndpointOption(
             address=ipaddress.IPv4Address("1.2.254.255"),
@@ -319,11 +317,16 @@ class TestHeader(unittest.TestCase):
         )
         self._check(payload, option, hdr.SOMEIPSDOption.parse)
 
+        self.assertEqual(await option.addrinfo(), ("1.2.254.255", 1023))
+
         payload = b"\x00\x09\x04\x00\x01\x02\xfe\xff\x00\x42\x03\xff"
         option = hdr.IPv4EndpointOption(
             address=ipaddress.IPv4Address("1.2.254.255"), l4proto=0x42, port=1023,
         )
         self._check(payload, option, hdr.SOMEIPSDOption.parse)
+
+        with self.assertRaises(socket.gaierror):
+            await option.addrinfo()
 
         with self.assertRaises(hdr.ParseError):
             hdr.SOMEIPSDOption.parse(
@@ -526,8 +529,10 @@ class TestHeader(unittest.TestCase):
 
         self.assertEqual(sd_resolved.entries[0].options_1, options[:2])
         self.assertEqual(sd_resolved.entries[0].options_2, options[:1])
+        self.assertEqual(sd_resolved.entries[0].options, options[:2] + options[:1])
         self.assertEqual(sd_resolved.entries[1].options_1, options[1:3])
         self.assertEqual(sd_resolved.entries[1].options_2, options[2:3])
+        self.assertEqual(sd_resolved.entries[1].options, options[1:3] + options[2:3])
         self.assertIsNone(sd_resolved.entries[0].option_index_1)
         self.assertIsNone(sd_resolved.entries[0].option_index_2)
         self.assertIsNone(sd_resolved.entries[1].option_index_1)
@@ -550,8 +555,10 @@ class TestHeader(unittest.TestCase):
 
         self.assertFalse(newsd.entries[0].options_1)
         self.assertFalse(newsd.entries[0].options_2)
+        self.assertFalse(newsd.entries[0].options)
         self.assertFalse(newsd.entries[1].options_1)
         self.assertFalse(newsd.entries[1].options_2)
+        self.assertFalse(newsd.entries[1].options)
         self.assertEqual(newsd.entries[0].option_index_1, 0)
         self.assertEqual(newsd.entries[0].option_index_2, 0)
         self.assertEqual(newsd.entries[0].num_options_1, 2)

@@ -8,6 +8,13 @@ import struct
 import socket
 import typing
 
+try:
+    from functools import cached_property
+except ImportError:  # pragma: nocover
+    cached_property = property  # type: ignore[misc,assignment]
+
+import someip.utils
+
 
 T = typing.TypeVar("T", ipaddress.IPv4Address, ipaddress.IPv6Address)
 
@@ -266,6 +273,10 @@ class SOMEIPSDEntry:
             f" instance=0x{self.instance_id:04x}, version={version}, ttl={self.ttl}, "
             f" options_1=[{s_options_1}], options_2=[{s_options_2}]"
         )
+
+    @cached_property
+    def options(self):
+        return self.options_1 + self.options_2
 
     @property
     def is_stop_offer(self):
@@ -567,6 +578,7 @@ class L4Protocols(enum.IntEnum):
 class AbstractIPOption(SOMEIPSDAbstractOption, typing.Generic[T]):
     _format: typing.ClassVar[struct.Struct]
     _address_type: typing.ClassVar[typing.Type[T]]
+    _family: typing.ClassVar[socket.AddressFamily]
     address: T
     l4proto: typing.Union[L4Protocols, int]
     port: int
@@ -592,8 +604,18 @@ class AbstractIPOption(SOMEIPSDAbstractOption, typing.Generic[T]):
         payload = self._format.pack(0, self.address.packed, 0, self.l4proto, self.port)
         return self.build_option(self.type_, payload)
 
+    async def addrinfo(self):
+        addr = await someip.utils.getfirstaddrinfo(
+            str(self.address),
+            self.port,
+            family=self._family,
+            proto=self.l4proto,
+            flags=socket.AI_NUMERICHOST | socket.AI_NUMERICSERV,
+        )
+        return addr[4]
 
-class EndpointOption:
+
+class EndpointOption(AbstractIPOption[T]):
     pass
 
 
@@ -608,6 +630,7 @@ class SDEndpointOption:
 class AbstractIPv4Option(AbstractIPOption[ipaddress.IPv4Address]):
     _format: typing.ClassVar[struct.Struct] = struct.Struct("!B4sBBH")
     _address_type = ipaddress.IPv4Address
+    _family = socket.AF_INET
 
     def __str__(self) -> str:  # pragma: nocover
         if isinstance(self.l4proto, L4Protocols):
@@ -619,6 +642,7 @@ class AbstractIPv4Option(AbstractIPOption[ipaddress.IPv4Address]):
 class AbstractIPv6Option(AbstractIPOption[ipaddress.IPv6Address]):
     _format: typing.ClassVar[struct.Struct] = struct.Struct("!B16sBBH")
     _address_type = ipaddress.IPv6Address
+    _family = socket.AF_INET6
 
     def __str__(self) -> str:  # pragma: nocover
         if isinstance(self.l4proto, L4Protocols):
@@ -628,7 +652,7 @@ class AbstractIPv6Option(AbstractIPOption[ipaddress.IPv6Address]):
 
 
 @SOMEIPSDOption.register
-class IPv4EndpointOption(AbstractIPv4Option, EndpointOption):
+class IPv4EndpointOption(AbstractIPv4Option, EndpointOption[ipaddress.IPv4Address]):
     type_: typing.ClassVar[int] = 0x04
 
 
@@ -644,7 +668,7 @@ class IPv4SDEndpointOption(AbstractIPv4Option, SDEndpointOption):
 
 
 @SOMEIPSDOption.register
-class IPv6EndpointOption(AbstractIPv6Option, EndpointOption):
+class IPv6EndpointOption(AbstractIPv6Option, EndpointOption[ipaddress.IPv6Address]):
     type_: typing.ClassVar[int] = 0x06
 
 
