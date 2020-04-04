@@ -23,7 +23,7 @@ class Eventgroup:
 
     protocol: someip.header.L4Protocols
 
-    def create_subscribe_entry(self, ttl=3):
+    def create_subscribe_entry(self, ttl=3, counter=0):
         endpoint_option = self._sockaddr_to_endpoint(self.sockname, self.protocol)
         return someip.header.SOMEIPSDEntry(
             sd_type=someip.header.SOMEIPSDEntryType.Subscribe,
@@ -31,7 +31,7 @@ class Eventgroup:
             instance_id=self.instance_id,
             major_version=self.major_version,
             ttl=ttl,
-            minver_or_counter=self.eventgroup_id,
+            minver_or_counter=(counter << 16) | self.eventgroup_id,
             options_1=(endpoint_option,),
         )
 
@@ -39,9 +39,7 @@ class Eventgroup:
         if not self.as_service().matches_offer(service.create_offer_entry()):
             return None
         return dataclasses.replace(
-            self,
-            instance_id=service.instance_id,
-            major_version=service.major_version,
+            self, instance_id=service.instance_id, major_version=service.major_version,
         )
 
     def as_service(self):
@@ -94,6 +92,8 @@ class Service:
         default_factory=tuple, compare=False
     )
 
+    eventgroups: typing.Tuple[int, ...] = dataclasses.field(default_factory=tuple)
+
     def matches_offer(self, entry: someip.header.SOMEIPSDEntry) -> bool:
         if entry.sd_type != someip.header.SOMEIPSDEntryType.OfferService:
             raise ValueError("entry is no OfferService")
@@ -129,6 +129,21 @@ class Service:
         ):
             return False
         return True
+
+    def matches_subscribe(self, entry: someip.header.SOMEIPSDEntry) -> bool:
+        if entry.sd_type != someip.header.SOMEIPSDEntryType.Subscribe:
+            raise ValueError("entry is no Subscribe")
+
+        if self.service_id != entry.service_id:
+            return False
+
+        if self.instance_id != 0xFFFF and self.instance_id != entry.instance_id:
+            return False
+
+        if self.major_version != 0xFF and self.major_version != entry.major_version:
+            return False
+
+        return entry.eventgroup_id in self.eventgroups
 
     def matches_service(self, other: Service) -> bool:
         if self.service_id != other.service_id:
@@ -195,7 +210,7 @@ class Service:
         )
 
     @classmethod
-    def from_offer_entry(cls, entry: someip.header.SOMEIPSDEntry) -> "Service":
+    def from_offer_entry(cls, entry: someip.header.SOMEIPSDEntry) -> Service:
         if entry.sd_type != someip.header.SOMEIPSDEntryType.OfferService:
             raise ValueError("entry is no OfferService")
         if not entry.options_resolved:

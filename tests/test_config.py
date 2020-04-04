@@ -82,6 +82,72 @@ class TestConfig(unittest.TestCase):
 
         self.assertEqual(evgr.create_subscribe_entry(), entry)
 
+    def test_eventgroup_for_service_no_match(self):
+        sockaddr = "203.0.113.78", 4321
+
+        evgr = cfg.Eventgroup(
+            service_id=0xDEAD,
+            instance_id=0x42,
+            major_version=23,
+            eventgroup_id=0xF00BAA,
+            sockname=sockaddr,
+            protocol=hdr.L4Protocols.TCP,
+        )
+
+        host_1 = ipaddress.ip_address("2001:db8::1234:5678:dead:beef")
+        host_2 = ipaddress.ip_address("203.0.113.78")
+        port = 4321
+
+        ep_1 = hdr.IPv6EndpointOption(
+            address=host_1, l4proto=hdr.L4Protocols.UDP, port=port
+        )
+        ep_2 = hdr.IPv4EndpointOption(
+            address=host_2, l4proto=hdr.L4Protocols.UDP, port=port
+        )
+        srv = cfg.Service(
+            service_id=0x0000,
+            instance_id=0xFFFF,
+            major_version=0xAA,
+            minor_version=0x123456,
+            options_1=(ep_1,),
+            options_2=(ep_2,),
+        )
+
+        self.assertIsNone(evgr.for_service(srv))
+
+    def test_eventgroup_for_service_match(self):
+        sockaddr = "203.0.113.78", 4321
+
+        evgr = cfg.Eventgroup(
+            service_id=0xDEAD,
+            instance_id=0x42,
+            major_version=0xFF,
+            eventgroup_id=0xF00BAA,
+            sockname=sockaddr,
+            protocol=hdr.L4Protocols.TCP,
+        )
+
+        host_1 = ipaddress.ip_address("2001:db8::1234:5678:dead:beef")
+        host_2 = ipaddress.ip_address("203.0.113.78")
+        port = 4321
+
+        ep_1 = hdr.IPv6EndpointOption(
+            address=host_1, l4proto=hdr.L4Protocols.UDP, port=port
+        )
+        ep_2 = hdr.IPv4EndpointOption(
+            address=host_2, l4proto=hdr.L4Protocols.UDP, port=port
+        )
+        srv = cfg.Service(
+            service_id=0xDEAD,
+            instance_id=0x42,
+            major_version=0xAA,
+            minor_version=0x123456,
+            options_1=(ep_1,),
+            options_2=(ep_2,),
+        )
+
+        self.assertEqual(evgr.for_service(srv), replace(evgr, major_version=0xAA))
+
     def test_service_convert_offer(self):
         host_1 = ipaddress.ip_address("2001:db8::1234:5678:dead:beef")
         host_2 = ipaddress.ip_address("203.0.113.78")
@@ -90,7 +156,7 @@ class TestConfig(unittest.TestCase):
         ep_1 = hdr.IPv6EndpointOption(
             address=host_1, l4proto=hdr.L4Protocols.TCP, port=port
         )
-        ep_2 = hdr.IPv6EndpointOption(
+        ep_2 = hdr.IPv4EndpointOption(
             address=host_2, l4proto=hdr.L4Protocols.TCP, port=port
         )
 
@@ -237,6 +303,51 @@ class TestConfig(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             srv.matches_find(replace(find, sd_type=hdr.SOMEIPSDEntryType.OfferService))
+
+    def test_service_match_subscribe(self):
+        host = ipaddress.ip_address("2001:db8::1234:5678:dead:beef")
+        port = 4321
+
+        ep = hdr.IPv6EndpointOption(
+            address=host, l4proto=hdr.L4Protocols.TCP, port=port
+        )
+
+        srv = cfg.Service(
+            service_id=0x1111,
+            instance_id=0x2222,
+            major_version=0x33,
+            minor_version=0x333333,
+            eventgroups=(23, 24, 25),
+        )
+
+        subscribe = hdr.SOMEIPSDEntry(
+            sd_type=hdr.SOMEIPSDEntryType.Subscribe,
+            service_id=0x1111,
+            instance_id=0x2222,
+            major_version=0x33,
+            minver_or_counter=(12 << 16) | 23,
+            ttl=3,
+            options_1=(ep,),
+        )
+
+        self.assertTrue(srv.matches_subscribe(subscribe))
+        self.assertFalse(replace(srv, service_id=1).matches_subscribe(subscribe))
+        self.assertFalse(replace(srv, instance_id=0xBBBB).matches_subscribe(subscribe))
+        self.assertTrue(replace(srv, instance_id=0xFFFF).matches_subscribe(subscribe))
+        self.assertFalse(replace(srv, major_version=0xBB).matches_subscribe(subscribe))
+        self.assertTrue(replace(srv, major_version=0xFF).matches_subscribe(subscribe))
+        self.assertFalse(
+            replace(srv, eventgroups=(1, 2, 3)).matches_subscribe(subscribe)
+        )
+
+        # ttl=0 is StopSubscribe, should still match
+        stop_subscribe = replace(subscribe, ttl=0)
+        self.assertTrue(srv.matches_subscribe(stop_subscribe))
+
+        with self.assertRaises(ValueError):
+            srv.matches_subscribe(
+                replace(stop_subscribe, sd_type=hdr.SOMEIPSDEntryType.FindService)
+            )
 
     def test_service_match_service(self):
         host = ipaddress.ip_address("2001:db8::1234:5678:dead:beef")
