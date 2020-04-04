@@ -120,7 +120,7 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
             data = b"\xde\xad\xbe\xef\x00\x00\x00\x08\xcc\xcc\xdd\xdd\x00\x02\x40\x04"
             sock.sendto(data, local_sockname)
 
-            with self.assertLogs('someip', level='ERROR'):
+            with self.assertLogs("someip", level="ERROR"):
                 await asyncio.sleep(0.01)
             prot.message_received.assert_not_called()
         finally:
@@ -295,7 +295,7 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
 
         prot.sd_message_received = unittest.mock.Mock()
 
-        with self.assertLogs('someip', 'ERROR'):
+        with self.assertLogs("someip", "ERROR"):
             prot.datagram_received(msg.build(), self.fake_addr, multicast=False)
 
         prot.sd_message_received.assert_not_called()
@@ -310,28 +310,32 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
         )
         msg = replace(msg, payload=payload)
 
-        with self.assertLogs('someip', 'ERROR'):
+        with self.assertLogs("someip", "ERROR"):
             prot.datagram_received(
-                replace(msg, service_id=0x1234).build(), self.fake_addr, multicast=False,
+                replace(msg, service_id=0x1234).build(),
+                self.fake_addr,
+                multicast=False,
             )
 
         prot.sd_message_received.assert_not_called()
 
-        with self.assertLogs('someip', 'ERROR'):
+        with self.assertLogs("someip", "ERROR"):
             prot.datagram_received(
                 replace(msg, method_id=0x1234).build(), self.fake_addr, multicast=False,
             )
 
         prot.sd_message_received.assert_not_called()
 
-        with self.assertLogs('someip', 'ERROR'):
+        with self.assertLogs("someip", "ERROR"):
             prot.datagram_received(
-                replace(msg, interface_version=12).build(), self.fake_addr, multicast=False,
+                replace(msg, interface_version=12).build(),
+                self.fake_addr,
+                multicast=False,
             )
 
         prot.sd_message_received.assert_not_called()
 
-        with self.assertLogs('someip', 'ERROR'):
+        with self.assertLogs("someip", "ERROR"):
             prot.datagram_received(
                 replace(msg, message_type=hdr.SOMEIPMessageType.REQUEST).build(),
                 self.fake_addr,
@@ -340,7 +344,7 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
 
         prot.sd_message_received.assert_not_called()
 
-        with self.assertLogs('someip', 'ERROR'):
+        with self.assertLogs("someip", "ERROR"):
             prot.datagram_received(
                 replace(msg, return_code=hdr.SOMEIPReturnCode.E_NOT_OK).build(),
                 self.fake_addr,
@@ -370,12 +374,12 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
         prot.subscribe_eventgroup(evgrp_1, self.multi_addr)
 
         prot.start()
-        with self.assertLogs('someip.subscribe', 'ERROR'):
-            await asyncio.sleep(0)  # trying to send Subscribe
+        with self.assertLogs("someip.subscribe", "ERROR"):
+            await settle()  # trying to send Subscribe
 
         prot.stop()
-        with self.assertLogs('someip.subscribe', 'ERROR'):
-            await asyncio.sleep(0)  # trying to send StopSubscribe
+        with self.assertLogs("someip.subscribe", "ERROR"):
+            await settle()  # trying to send StopSubscribe
 
     async def test_sd_multicast_bad_af(self):
         with self.assertRaises(ValueError):
@@ -1253,11 +1257,11 @@ class TestSDAnnounce(unittest.IsolatedAsyncioTestCase, _SendTiming):
         self.prot.CYCLIC_OFFER_DELAY = 0
 
         self.prot.start()
-        with self.assertLogs('someip.sd.announce', 'WARNING') as cm:
+        with self.assertLogs("someip.sd.announce", "WARNING") as cm:
             await asyncio.sleep(1.3)
         self.prot.stop()
 
-        self.assertTrue(any('CYCLIC_OFFER_DELAY' in msg for msg in cm.output))
+        self.assertTrue(any("CYCLIC_OFFER_DELAY" in msg for msg in cm.output))
 
         call = unittest.mock.call(
             [
