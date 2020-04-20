@@ -466,13 +466,13 @@ class SubscriptionProtocol(_BaseSDProtocol):
 
 
 class _BaseMulticastSDProtocol(_BaseSDProtocol):
-    INITIAL_DELAY_MIN = 0.05  # in seconds
-    INITIAL_DELAY_MAX = 0.5  # in seconds
-    REQUEST_RESPONSE_DELAY_MIN = 0.05  # in seconds
-    REQUEST_RESPONSE_DELAY_MAX = 0.5  # in seconds
-    REPETITIONS_MAX = 4
-    REPETITIONS_BASE_DELAY = 0.03  # in seconds
-    CYCLIC_OFFER_DELAY = 10  # in seconds
+    INITIAL_DELAY_MIN = 0.0  # in seconds
+    INITIAL_DELAY_MAX = 3  # in seconds
+    REQUEST_RESPONSE_DELAY_MIN = 0.01  # in seconds
+    REQUEST_RESPONSE_DELAY_MAX = 0.05  # in seconds
+    REPETITIONS_MAX = 3
+    REPETITIONS_BASE_DELAY = 0.01  # in seconds
+    CYCLIC_OFFER_DELAY = 1  # in seconds
 
     def __init__(self, multicast_addr: _T_SOCKADDR, logger: str = "someip.sd.abstract"):
         super().__init__(logger=logger)
