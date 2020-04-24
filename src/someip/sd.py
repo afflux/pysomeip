@@ -5,6 +5,7 @@ import collections
 import dataclasses
 import functools
 import ipaddress
+import itertools
 import logging
 import os
 import platform
@@ -41,6 +42,17 @@ def pack_addr_v4(a):
 
 def pack_addr_v6(a):
     return socket.inet_pton(socket.AF_INET6, a.split("%", 1)[0])
+
+
+def format_address(addr: _T_SOCKADDR) -> str:
+    host, port = socket.getnameinfo(addr, socket.NI_NUMERICHOST | socket.NI_NUMERICSERV)
+    ip = ipaddress.ip_address(host)
+    if isinstance(ip, ipaddress.IPv4Address):
+        return f"{ip!s}:{port:s}"
+    elif isinstance(ip, ipaddress.IPv6Address):
+        return f"[{ip!s}]:{port:s}"
+    else:  # pragma: nocover
+        raise NotImplementedError(f"unknown ip address format: {addr!r} -> {ip!r}")
 
 
 class SOMEIPDatagramProtocol:
@@ -89,23 +101,10 @@ class SOMEIPDatagramProtocol:
         except someip.header.ParseError as exc:
             self.log.error(
                 "failed to parse SOME/IP datagram from %s: %r",
-                self.format_address(addr),
+                format_address(addr),
                 data,
                 exc_info=exc,
             )
-
-    @staticmethod
-    def format_address(addr: _T_SOCKADDR) -> str:
-        host, port = socket.getnameinfo(
-            addr, socket.NI_NUMERICHOST | socket.NI_NUMERICSERV
-        )
-        ip = ipaddress.ip_address(host)
-        if isinstance(ip, ipaddress.IPv4Address):
-            return f"{ip!s}:{port:s}"
-        elif isinstance(ip, ipaddress.IPv6Address):
-            return f"[{ip!s}]:{port:s}"
-        else:  # pragma: nocover
-            raise NotImplementedError(f"unknown ip address format: {addr!r} -> {ip!r}")
 
     def error_received(self, exc: typing.Optional[Exception]):  # pragma: nocover
         self.log.exception("someip event listener protocol failed", exc_info=exc)
@@ -125,7 +124,7 @@ class SOMEIPDatagramProtocol:
         """
         called when a well-formed SOME/IP datagram was received
         """
-        self.log.info("received from %s\n%s", self.format_address(addr), someip_message)
+        self.log.info("received from %s\n%s", format_address(addr), someip_message)
         pass
 
     def send(self, buf: bytes, remote: _T_OPT_SOCKADDR = None):
@@ -138,7 +137,10 @@ class SOMEIPDatagramProtocol:
                 "no transport set on %r but tried to send to %r: %r", self, remote, buf
             )
             return
-        self.transport.sendto(buf, remote or self.default_addr)  # type: ignore[arg-type]
+        if not remote:
+            remote = self.default_addr
+        # workaround for https://github.com/python/typeshed/pull/3943
+        self.transport.sendto(buf, remote)  # type: ignore[arg-type]
 
     def send_sd(
         self,
@@ -227,7 +229,7 @@ class _BaseSDProtocol(SOMEIPDatagramProtocol):
 
         if rest:  # pragma: nocover
             self.log.warning(
-                "unparsed data after SD from %s: %r", self.format_address(addr), rest
+                "unparsed data after SD from %s: %r", format_address(addr), rest
             )
 
     def sd_message_received(
@@ -290,7 +292,7 @@ class _SessionStorage:
         return flag, _id
 
 
-class SubscriptionProtocol(_BaseSDProtocol):
+class ServiceSubscriber:
     """
     datagram protocol for subscribing to eventgroups via SOME/IP SD
 
@@ -298,23 +300,24 @@ class SubscriptionProtocol(_BaseSDProtocol):
         TODO
     """
 
-    def __init__(self, ttl=5, refresh_interval=3):
-        super().__init__(logger="someip.subscribe")
-        if ttl == 0 or ttl == TTL_FOREVER:
-            raise ValueError('ttl may not be 0 or 0xffffff. set to None for "forever"')
+    def __init__(self, sd: ServiceDiscoveryProtocol):
+        self.sd = sd
+        self.timings = sd.timings
+        self.log = sd.log.getChild("subscribe")
+
+        ttl = self.timings.SUBSCRIBE_TTL
+        refresh_interval = self.timings.SUBSCRIBE_REFRESH_INTERVAL
 
         if not refresh_interval and ttl:  # pragma: nocover
             self.log.warning(
                 "no refresh, but ttl=%r set. expect lost connection after ttl", ttl
             )
-        elif refresh_interval and refresh_interval > ttl:  # pragma: nocover
+        elif refresh_interval and refresh_interval >= ttl:  # pragma: nocover
             self.log.warning(
                 "refresh_interval=%r too high for ttl=%r. expect dropped updates.",
                 refresh_interval,
                 ttl,
             )
-        self.ttl = ttl
-        self.refresh_interval = refresh_interval
 
         self.task: typing.Optional[asyncio.Task[None]] = None
         # separate alive tracking (instead of using task.done()) as task will only run
@@ -338,7 +341,7 @@ class SubscriptionProtocol(_BaseSDProtocol):
         # relies on _subscribe() to send out the Subscribe messages in the next cycle.
         self.subscribeentries.append((eventgroup, endpoint))
 
-        if not self.refresh_interval and self.alive:
+        if not self.timings.SUBSCRIBE_REFRESH_INTERVAL and self.alive:
             # when TTL=forever, _subscribe() task does not run continuously, so we need
             # to send individual subscribe entries directly
             asyncio.get_event_loop().call_soon(
@@ -346,7 +349,10 @@ class SubscriptionProtocol(_BaseSDProtocol):
             )
 
     def stop_subscribe_eventgroup(
-        self, eventgroup: someip.config.Eventgroup, endpoint: _T_SOCKADDR,
+        self,
+        eventgroup: someip.config.Eventgroup,
+        endpoint: _T_SOCKADDR,
+        send: bool = True,
     ) -> None:
         """
         eventgroup:
@@ -359,9 +365,10 @@ class SubscriptionProtocol(_BaseSDProtocol):
         except ValueError:
             return
 
-        asyncio.get_event_loop().call_soon(
-            self._send_stop_subscribe, endpoint, [eventgroup]
-        )
+        if send:
+            asyncio.get_event_loop().call_soon(
+                self._send_stop_subscribe, endpoint, [eventgroup]
+            )
 
     def _send_stop_subscribe(
         self, remote: _T_SOCKADDR, entries: typing.Collection[someip.config.Eventgroup]
@@ -371,9 +378,7 @@ class SubscriptionProtocol(_BaseSDProtocol):
     def _send_start_subscribe(
         self, remote: _T_SOCKADDR, entries: typing.Collection[someip.config.Eventgroup]
     ) -> None:
-        self._send_subscribe(
-            TTL_FOREVER if self.ttl is None else self.ttl, remote, entries
-        )
+        self._send_subscribe(self.timings.SUBSCRIBE_TTL, remote, entries)
 
     def _send_subscribe(
         self,
@@ -381,16 +386,7 @@ class SubscriptionProtocol(_BaseSDProtocol):
         remote: _T_SOCKADDR,
         entries: typing.Collection[someip.config.Eventgroup],
     ) -> None:
-        if not self.transport:
-            self.log.error(
-                "no transport set on %r but tried to send to %r: %r",
-                self,
-                remote,
-                entries,
-            )
-            return
-
-        self.send_sd(
+        self.sd.send_sd(
             [e.create_subscribe_entry(ttl=ttl) for e in entries], remote=remote
         )
 
@@ -404,6 +400,9 @@ class SubscriptionProtocol(_BaseSDProtocol):
         self.task = loop.create_task(self._subscribe())
 
     def stop(self, send_stop_subscribe=True) -> None:
+        if not self.alive:
+            return
+
         self.alive = False
 
         if self.task:  # pragma: nobranch
@@ -427,47 +426,30 @@ class SubscriptionProtocol(_BaseSDProtocol):
             endpoint_entries[endpoint].append(eventgroup)
         return endpoint_entries
 
-    def connection_lost(self, exc: typing.Optional[Exception]) -> None:
-        log = self.log.exception if exc else self.log.info
-        log("connection lost. stopping subscribe task", exc_info=exc)
-        self.stop(send_stop_subscribe=False)
-
     @log_exceptions()
     async def _subscribe(self) -> None:
         while True:
             for endpoint, entries in self._group_entries().items():
                 self._send_start_subscribe(endpoint, entries)
 
-            if self.refresh_interval is None:
+            if self.timings.SUBSCRIBE_REFRESH_INTERVAL is None:
                 break
 
             try:
-                await asyncio.sleep(self.refresh_interval)
+                await asyncio.sleep(self.timings.SUBSCRIBE_REFRESH_INTERVAL)
             except asyncio.CancelledError:
                 break
 
-    def sd_message_received(
-        self, sdhdr: someip.header.SOMEIPSDHeader, addr: _T_SOCKADDR, multicast: bool
-    ) -> None:
-        """
-        called when a well-formed SOME/IP SD message was received
-        """
+    def reboot_detected(self, addr: _T_SOCKADDR) -> None:
+        # TODO
+        pass
 
-        faddr = self.format_address(addr)
-
-        for entry in sdhdr.entries:
-            if entry.sd_type == someip.header.SOMEIPSDEntryType.SubscribeAck:
-                if entry.ttl == 0:
-                    self.log.info("received Subscribe NACK from %s: %s", faddr, entry)
-                    # TODO raise NACK to application
-                else:
-                    self.log.info("received Subscribe ACK from %s: %s", faddr, entry)
-                    # TODO raise ACK to application
-            else:
-                self.log.warning("unexpected entry received from %s: %s", faddr, entry)
+    def connection_lost(self, exc: typing.Optional[Exception]) -> None:
+        self.stop(send_stop_subscribe=False)
 
 
-class _BaseMulticastSDProtocol(_BaseSDProtocol):
+@dataclasses.dataclass()
+class Timings:
     INITIAL_DELAY_MIN = 0.0  # in seconds
     INITIAL_DELAY_MAX = 3  # in seconds
     REQUEST_RESPONSE_DELAY_MIN = 0.01  # in seconds
@@ -475,11 +457,12 @@ class _BaseMulticastSDProtocol(_BaseSDProtocol):
     REPETITIONS_MAX = 3
     REPETITIONS_BASE_DELAY = 0.01  # in seconds
     CYCLIC_OFFER_DELAY = 1  # in seconds
+    ANNOUNCE_TTL = 3  # in seconds
+    SUBSCRIBE_TTL = 5  # in seconds
+    SUBSCRIBE_REFRESH_INTERVAL: typing.Optional[int] = 3  # in seconds
 
-    def __init__(self, multicast_addr: _T_SOCKADDR, logger: str = "someip.sd.abstract"):
-        super().__init__(logger=logger)
-        self.default_addr = multicast_addr
 
+class ServiceDiscoveryProtocol(_BaseSDProtocol):
     @classmethod
     async def _create_endpoint(
         cls,
@@ -652,62 +635,30 @@ class _BaseMulticastSDProtocol(_BaseSDProtocol):
 
         return trsp_u, trsp_m, prot
 
-
-class ClientServiceListener:
-    def service_offered(
-        self, service: someip.config.Service, source: _T_SOCKADDR
-    ) -> None:
-        ...
-
-    def service_stopped(self, service: someip.config.Service) -> None:
-        ...
-
-
-class AutoSubscribeServiceListener(ClientServiceListener):
     def __init__(
         self,
-        protocol: SOMEIPDatagramProtocol,
-        eventgroup: someip.config.Eventgroup,
-        ttl=3,
+        multicast_addr: _T_SOCKADDR,
+        timings: typing.Optional[Timings] = None,
+        logger: str = "someip.sd",
     ):
-        self.protocol = protocol
-        self.eventgroup = eventgroup
-        self.ttl = ttl
+        super().__init__(logger=logger)
+        self.timings = timings or Timings()
+        self.default_addr = multicast_addr
+        self.discovery = ServiceDiscover(self)
+        self.subscriber = ServiceSubscriber(self)
+        self.announcer = ServiceAnnouncer(self)
 
-    def service_offered(
-        self, service: someip.config.Service, source: _T_SOCKADDR
-    ) -> None:
-        eventgroup = self.eventgroup.for_service(service)
-        if not eventgroup:  # pragma: nocover
-            return
-        self.protocol.send_sd([eventgroup.create_subscribe_entry(self.ttl)], source)
+    def connection_lost(self, exc: typing.Optional[Exception]) -> None:
+        log = self.log.exception if exc else self.log.info
+        log("connection lost. stopping all child tasks", exc_info=exc)
+        self.subscriber.connection_lost(exc)
+        self.discovery.connection_lost(exc)
+        self.announcer.connection_lost(exc)
 
-    def service_stopped(self, service: someip.config.Service) -> None:
-        # TODO do I need to react?
-        pass
-
-
-class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
-    """
-    datagram protocol for subscribing to eventgroups via SOME/IP SD
-
-    example:
-        TODO
-    """
-
-    def __init__(
-        self, multicast_addr: typing.Tuple[str, int], logger: str = "someip.sd.discover"
-    ):
-        super().__init__(logger=logger, multicast_addr=multicast_addr)
-        self.watched_services: typing.Dict[
-            someip.config.Service, typing.Set[ClientServiceListener],
-        ] = collections.defaultdict(set)
-        self.watcher_all_services: typing.Set[ClientServiceListener] = set()
-
-        self.found_services: typing.Dict[
-            _T_SOCKADDR,
-            typing.Dict[someip.config.Service, typing.Optional[asyncio.Handle]],
-        ] = collections.defaultdict(dict)
+    def reboot_detected(self, addr: _T_SOCKADDR) -> None:
+        self.subscriber.reboot_detected(addr)
+        self.discovery.reboot_detected(addr)
+        self.announcer.reboot_detected(addr)
 
     def sd_message_received(
         self, sdhdr: someip.header.SOMEIPSDHeader, addr: _T_SOCKADDR, multicast: bool
@@ -717,17 +668,197 @@ class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
         """
         LOG.debug(
             "sd_message_received received from %s (multicast=%r): %s",
-            self.format_address(addr),
+            format_address(addr),
             multicast,
             sdhdr,
         )
 
         for entry in sdhdr.entries:
-            if entry.sd_type != someip.header.SOMEIPSDEntryType.OfferService:
+            if entry.sd_type == someip.header.SOMEIPSDEntryType.OfferService:
+                asyncio.get_event_loop().call_soon(
+                    self.discovery.handle_offer, addr, entry
+                )
                 continue
-            asyncio.get_event_loop().call_soon(self._handle_offer, addr, entry)
 
-    def _handle_offer(
+            if entry.sd_type == someip.header.SOMEIPSDEntryType.SubscribeAck:
+                # TODO raise to application
+                # TODO figure out what to do when not receiving an ACK after X?
+                if entry.ttl == 0:
+                    self.log.info("received Subscribe NACK from %s: %s", addr, entry)
+                else:
+                    self.log.info("received Subscribe ACK from %s: %s", addr, entry)
+                continue
+
+            if entry.sd_type == someip.header.SOMEIPSDEntryType.FindService:
+                asyncio.create_task(
+                    self.announcer.handle_findservice(
+                        entry, addr, multicast, sdhdr.flag_unicast
+                    ),
+                )
+                continue
+
+            if entry.sd_type == someip.header.SOMEIPSDEntryType.Subscribe:
+                if multicast:
+                    self.log.warning(
+                        "discarding subscribe received over multicast from %s: %s",
+                        format_address(addr),
+                        entry,
+                    )
+                    continue
+                asyncio.create_task(self.announcer.handle_subscribe(entry, addr))
+                continue
+
+            self.log.info(
+                "received unexpected from %s: %s", format_address(addr), entry
+            )
+
+    def find_subscribe_eventgroup(self, eventgroup: someip.config.Eventgroup):
+        self.discovery.watch_service(
+            eventgroup.as_service(),
+            AutoSubscribeServiceListener(self.subscriber, eventgroup),
+        )
+
+
+class ClientServiceListener:
+    def service_offered(
+        self, service: someip.config.Service, source: _T_SOCKADDR
+    ) -> None:
+        ...
+
+    def service_stopped(
+        self, service: someip.config.Service, source: _T_SOCKADDR
+    ) -> None:
+        ...
+
+
+class AutoSubscribeServiceListener(ClientServiceListener):
+    def __init__(
+        self,
+        subscriber: ServiceSubscriber,
+        eventgroup: someip.config.Eventgroup,
+        ttl=3,
+    ):
+        self.subscriber = subscriber
+        self.eventgroup = eventgroup
+        self.ttl = ttl
+
+    def service_offered(
+        self, service: someip.config.Service, source: _T_SOCKADDR
+    ) -> None:
+        eventgroup = self.eventgroup.for_service(service)
+        if not eventgroup:  # pragma: nocover
+            return
+        # TODO support TCP event groups: application (or lib?) needs to open connection
+        # before subscribe
+        self.subscriber.subscribe_eventgroup(eventgroup, source)
+
+    def service_stopped(
+        self, service: someip.config.Service, source: _T_SOCKADDR
+    ) -> None:
+        eventgroup = self.eventgroup.for_service(service)
+        if not eventgroup:  # pragma: nocover
+            return
+        # TODO support TCP event groups: application (or lib?) needs to close connection
+        self.subscriber.stop_subscribe_eventgroup(eventgroup, source, send=False)
+
+
+KT = typing.TypeVar("KT")
+_T_CALLBACK = typing.Callable[[KT, _T_SOCKADDR], None]
+
+
+class TimedStore(typing.Generic[KT]):
+    def __init__(self, log):
+        self.log = log
+        self.store: typing.Dict[
+            _T_SOCKADDR,
+            typing.Dict[
+                KT,
+                typing.Tuple[
+                    typing.Callable[[KT, _T_SOCKADDR], None],
+                    typing.Optional[asyncio.Handle],
+                ],
+            ],
+        ] = collections.defaultdict(dict)
+
+    def refresh(
+        self,
+        ttl,
+        address: _T_SOCKADDR,
+        entry: KT,
+        callback_new: _T_CALLBACK[KT],
+        callback_expired: _T_CALLBACK[KT],
+    ) -> None:
+        try:
+            _, old_timeout_handle = self.store[address].pop(entry)
+            if old_timeout_handle:
+                old_timeout_handle.cancel()
+        except KeyError:
+            # pop failed => new entry
+            callback_new(entry, address)
+
+        timeout_handle = None
+        if ttl != TTL_FOREVER:
+            timeout_handle = asyncio.get_event_loop().call_later(
+                ttl, self._expired, address, address
+            )
+
+        self.store[address][entry] = (callback_expired, timeout_handle)
+
+    def stop(self, address: _T_SOCKADDR, entry: KT) -> None:
+        try:
+            callback, _timeout_handle = self.store[address].pop(entry)
+        except KeyError:
+            # race-condition: service was already stopped. don't notify again
+            return
+
+        if _timeout_handle:
+            _timeout_handle.cancel()
+
+        asyncio.get_event_loop().call_soon(callback, entry, address)
+
+    def stop_all_for_address(self, address: _T_SOCKADDR) -> None:
+        for entry, (callback, handle) in self.store[address].items():
+            if handle:
+                handle.cancel()
+            asyncio.get_event_loop().call_soon(callback, entry, address)
+        self.store[address].clear()
+
+    def stop_all(self) -> None:
+        for addr in self.store.keys():
+            self.stop_all_for_address(addr)
+        self.store.clear()
+
+    def _expired(self, address: _T_SOCKADDR, entry: KT) -> None:
+        try:
+            callback, _ = self.store[address].pop(entry)
+        except KeyError:  # pragma: nocover
+            self.log.warning(
+                "race-condition: entry %r timeout was not in store but triggered"
+                " anyway. forgot to cancel?",
+                entry,
+            )
+            return
+
+        asyncio.get_event_loop().call_soon(callback, entry, address)
+
+    def entries(self) -> typing.Iterator[KT]:
+        return itertools.chain.from_iterable(x.keys() for x in self.store.values())
+
+
+class ServiceDiscover:
+    def __init__(self, sd: ServiceDiscoveryProtocol):
+        self.sd = sd
+        self.timings = sd.timings
+        self.log = sd.log.getChild("discover")
+
+        self.watched_services: typing.Dict[
+            someip.config.Service, typing.Set[ClientServiceListener],
+        ] = collections.defaultdict(set)
+        self.watcher_all_services: typing.Set[ClientServiceListener] = set()
+
+        self.found_services: TimedStore[someip.config.Service] = TimedStore(self.log)
+
+    def handle_offer(
         self, addr: _T_SOCKADDR, entry: someip.header.SOMEIPSDEntry
     ) -> None:
         if not self.is_watching_service(entry):
@@ -751,11 +882,7 @@ class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
         self.watcher_all_services.add(listener)
 
     def _service_found(self, service: someip.config.Service) -> bool:
-        for d in self.found_services.values():
-            for s in d.keys():
-                if service.matches_service(s):
-                    return True
-        return False
+        return any(service.matches_service(s) for s in self.found_services.entries())
 
     async def send_find_services(self):
         if not self.watched_services:
@@ -769,92 +896,51 @@ class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
             ]
 
         await asyncio.sleep(
-            random.uniform(self.INITIAL_DELAY_MIN, self.INITIAL_DELAY_MAX)
+            random.uniform(
+                self.timings.INITIAL_DELAY_MIN, self.timings.INITIAL_DELAY_MAX
+            )
         )
         find_entries = _build_entries()
         if not find_entries:
             return
-        self.send_sd(find_entries)  # 4.2.1: SWS_SD_00353
+        self.sd.send_sd(find_entries)  # 4.2.1: SWS_SD_00353
 
-        for i in range(self.REPETITIONS_MAX):
+        for i in range(self.timings.REPETITIONS_MAX):
             await asyncio.sleep(
-                (2 ** i) * self.REPETITIONS_BASE_DELAY
+                (2 ** i) * self.timings.REPETITIONS_BASE_DELAY
             )  # 4.2.1: SWS_SD_00363
 
             find_entries = _build_entries()
             if not find_entries:
                 return
-            self.send_sd(find_entries)  # 4.2.1: SWS_SD_00457
+            self.sd.send_sd(find_entries)  # 4.2.1: SWS_SD_00457
 
     def service_offered(self, addr: _T_SOCKADDR, entry: someip.header.SOMEIPSDEntry):
         service = someip.config.Service.from_offer_entry(entry)
 
-        try:
-            old_timeout_handle = self.found_services[addr].pop(service)
-            if old_timeout_handle:
-                old_timeout_handle.cancel()
-        except KeyError:
-            # new service
-            self._notify_service_offered(service, addr)
-
-        timeout_handle: typing.Optional[asyncio.TimerHandle] = None
-        if entry.ttl != TTL_FOREVER:
-            timeout_handle = asyncio.get_event_loop().call_later(
-                entry.ttl, self._service_timeout, addr, service,
-            )
-
-        self.found_services[addr][service] = timeout_handle
+        self.found_services.refresh(
+            entry.ttl,
+            addr,
+            service,
+            self._notify_service_offered,
+            self._notify_service_stopped,
+        )
 
     def connection_lost(self, exc: typing.Optional[Exception]) -> None:
-        log = self.log.exception if exc else self.log.info
-        log("connection lost. stopping service_timeout tasks", exc_info=exc)
-
-        for addr, services in self.found_services.items():
-            for service, handle in services.items():
-                self._notify_service_stopped(service, addr)
-                if handle:
-                    handle.cancel()
-        self.found_services.clear()
-
-    @log_exceptions("exception in _service_timeout for {0!r}")
-    def _service_timeout(
-        self, addr: _T_SOCKADDR, service: someip.config.Service
-    ) -> None:
-        try:
-            self.found_services[addr].pop(service)
-        except KeyError:  # pragma: nocover
-            self.log.warning(
-                "race-condition: service timeout was not in found_services but"
-                " triggered anyway. forgot to cancel?"
-            )
-            return
-
-        self._notify_service_stopped(service, addr)
+        self.found_services.stop_all()
 
     def service_offer_stopped(
         self, addr: _T_SOCKADDR, entry: someip.header.SOMEIPSDEntry
     ) -> None:
         service = someip.config.Service.from_offer_entry(entry)
 
-        try:
-            _timeout_handle = self.found_services[addr].pop(service)
-        except KeyError:
-            # race-condition: service was already stopped. don't notify again
-            return
-
-        if _timeout_handle:
-            _timeout_handle.cancel()
-        self._notify_service_stopped(service, addr)
+        self.found_services.stop(addr, service)
 
     def reboot_detected(self, addr: _T_SOCKADDR) -> None:
         # notify stop for each service of rebooted instance.
-        # reboot_detected() is called before sd_message_received(), so any offered service in this
-        # message will cause a new notify
-        for service, handle in self.found_services[addr].items():
-            if handle:
-                handle.cancel()
-            self._notify_service_stopped(service, addr)
-        self.found_services[addr].clear()
+        # reboot_detected() is called before sd_message_received(), so any offered
+        # service in this message will cause a new notify
+        self.found_services.stop_all_for_address(addr)
 
     def _notify_service_offered(
         self, service: someip.config.Service, source: _T_SOCKADDR
@@ -884,11 +970,6 @@ class ServiceDiscoveryProtocol(_BaseMulticastSDProtocol):
                 listener.service_stopped, service, source
             )
 
-    def find_subscribe_eventgroup(self, eventgroup: someip.config.Eventgroup):
-        self.watch_service(
-            eventgroup.as_service(), AutoSubscribeServiceListener(self, eventgroup)
-        )
-
 
 @dataclasses.dataclass(frozen=True)
 class EventgroupSubscription:
@@ -898,9 +979,9 @@ class EventgroupSubscription:
     id: int
     counter: int
     ttl: int = dataclasses.field(compare=False)
-    endpoints: typing.Tuple[someip.header.EndpointOption[typing.Any], ...] = dataclasses.field(
-        default_factory=tuple
-    )
+    endpoints: typing.FrozenSet[
+        someip.header.EndpointOption[typing.Any]
+    ] = dataclasses.field(default_factory=frozenset)
     options: typing.Tuple[someip.header.SOMEIPSDOption, ...] = dataclasses.field(
         default_factory=tuple, compare=False
     )
@@ -922,7 +1003,7 @@ class EventgroupSubscription:
             id=entry.eventgroup_id,
             counter=entry.eventgroup_counter,
             ttl=entry.ttl,
-            endpoints=tuple(endpoints),
+            endpoints=frozenset(endpoints),
             options=tuple(options),
         )
 
@@ -940,10 +1021,17 @@ class EventgroupSubscription:
         return dataclasses.replace(self, ttl=0).to_ack_entry()
 
 
+class NakSubscription(Exception):
+    pass
+
+
 class ServerServiceListener:
     def client_subscribed(
         self, subscription: EventgroupSubscription, source: _T_SOCKADDR
-    ) -> bool:
+    ) -> None:
+        """
+        should raise someip.sd.NakSubscription if subscription should be rejected
+        """
         ...
 
     def client_unsubscribed(
@@ -955,14 +1043,12 @@ class ServerServiceListener:
 _T_SL = typing.Tuple[someip.config.Service, ServerServiceListener]
 
 
-class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
+class ServiceAnnouncer:
     # TODO doc
-    TTL = 3
-
-    def __init__(
-        self, multicast_addr: typing.Tuple[str, int], logger: str = "someip.sd.announce"
-    ):
-        super().__init__(logger=logger, multicast_addr=multicast_addr)
+    def __init__(self, sd: ServiceDiscoveryProtocol):
+        self.sd = sd
+        self.timings = sd.timings
+        self.log = sd.log.getChild("announce")
 
         self.task: typing.Optional[asyncio.Task[None]] = None
         self.alive = False
@@ -970,13 +1056,7 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
         self._last_multicast_offer: float = 0
 
         self.announcing_services: typing.List[_T_SL] = []
-        self.subscriptions: typing.Dict[
-            _T_SOCKADDR,
-            typing.Dict[
-                EventgroupSubscription,
-                typing.Tuple[ServerServiceListener, typing.Optional[asyncio.Handle]],
-            ],
-        ] = collections.defaultdict(dict)
+        self.subscriptions: TimedStore[EventgroupSubscription] = TimedStore(self.log)
 
     def announce_service(
         self, service: someip.config.Service, listener: ServerServiceListener
@@ -985,41 +1065,8 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
             self.log.warning("adding services without going through startup phase")
         self.announcing_services.append((service, listener))
 
-    def sd_message_received(
-        self, sdhdr: someip.header.SOMEIPSDHeader, addr: _T_SOCKADDR, multicast: bool
-    ) -> None:
-        """
-        called when a well-formed SOME/IP SD message was received
-        """
-
-        for entry in sdhdr.entries:
-            if entry.sd_type == someip.header.SOMEIPSDEntryType.OfferService:
-                # is handled by ServiceDiscoveryProtocol
-                continue
-            elif entry.sd_type == someip.header.SOMEIPSDEntryType.FindService:
-                self.log.info("received from %s: %s", self.format_address(addr), entry)
-                # XXX spec is unclear on RequestResponseDelay behavior if new Find is received
-                asyncio.create_task(
-                    self._handle_findservice(
-                        entry, addr, multicast, sdhdr.flag_unicast
-                    ),
-                )
-            elif entry.sd_type == someip.header.SOMEIPSDEntryType.Subscribe:
-                if multicast:
-                    self.log.warning(
-                        "discarding subscribe received over multicast from %s: %s",
-                        self.format_address(addr),
-                        entry,
-                    )
-                    continue
-                asyncio.create_task(self._handle_subscribe(entry, addr))
-            else:
-                self.log.info(
-                    "received unexpected from %s: %s", self.format_address(addr), entry
-                )
-
     @log_exceptions()
-    async def _handle_subscribe(
+    async def handle_subscribe(
         self, entry: someip.header.SOMEIPSDEntry, addr: _T_SOCKADDR,
     ) -> None:
         subscription = EventgroupSubscription.from_subscribe_entry(entry)
@@ -1033,7 +1080,7 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
         if not matching_listeners:
             self.log.warning(
                 "discarding subscribe for unknown service from %s: %s",
-                self.format_address(addr),
+                format_address(addr),
                 entry,
             )
             self._send_subscribe_nack(subscription, addr)
@@ -1042,86 +1089,50 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
             self.log.warning(
                 "multiple configured services match subscribe %s from %s: %s",
                 entry,
-                self.format_address(addr),
+                format_address(addr),
                 matching_listeners,
             )
 
         listener = matching_listeners[0]
-        self.eventgroup_subscribed(listener, addr, subscription)
-
-    @log_exceptions("exception in {__func__} for {0!r}")
-    def _subscription_timeout(
-        self, addr: _T_SOCKADDR, subscription: EventgroupSubscription
-    ) -> None:
-        try:
-            listener, _ = self.subscriptions[addr].pop(subscription)
-        except KeyError:  # pragma: nocover
-            self.log.warning(
-                "race-condition: subscription timeout was not in subscriptions but"
-                " triggered anyway. forgot to cancel?"
-            )
-            return
-
-        listener.client_unsubscribed(subscription, addr)
-
-    def eventgroup_subscribed(
-        self,
-        listener: ServerServiceListener,
-        addr: _T_SOCKADDR,
-        subscription: EventgroupSubscription,
-    ) -> None:
-        timeout_handle: typing.Optional[asyncio.TimerHandle] = None
-        if subscription.ttl != TTL_FOREVER:
-            timeout_handle = asyncio.get_event_loop().call_later(
-                subscription.ttl, self._subscription_timeout, addr, subscription,
-            )
 
         try:
-            _, old_timeout_handle = self.subscriptions[addr].pop(subscription)
-            if old_timeout_handle:
-                old_timeout_handle.cancel()
-        except KeyError:
-            # new subscription
-            if not listener.client_subscribed(subscription, addr):
-                if timeout_handle:
-                    timeout_handle.cancel()
-                self._send_subscribe_nack(subscription, addr)
-                return
-        self.send_sd([subscription.to_ack_entry()], remote=addr)
-
-        self.subscriptions[addr][subscription] = (listener, timeout_handle)
+            self.subscriptions.refresh(
+                subscription.ttl,
+                addr,
+                subscription,
+                listener.client_subscribed,
+                listener.client_unsubscribed,
+            )
+        except NakSubscription:
+            self._send_subscribe_nack(subscription, addr)
+        else:
+            self.sd.send_sd([subscription.to_ack_entry()], remote=addr)
 
     def eventgroup_subscribe_stopped(
         self, addr: _T_SOCKADDR, subscription: EventgroupSubscription
     ) -> None:
-        try:
-            listener, _timeout_handle = self.subscriptions[addr].pop(subscription)
-        except KeyError:
-            # subscription not known, or already timed out
-            return
-
-        if _timeout_handle:
-            _timeout_handle.cancel()
-        listener.client_unsubscribed(subscription, addr)
+        self.subscriptions.stop(addr, subscription)
 
     def _send_subscribe_nack(
         self, subscription: EventgroupSubscription, addr: _T_SOCKADDR
     ) -> None:
-        self.send_sd([subscription.to_nack_entry()], remote=addr)
+        self.sd.send_sd([subscription.to_nack_entry()], remote=addr)
 
     @log_exceptions()
-    async def _handle_findservice(
+    async def handle_findservice(
         self,
         entry: someip.header.SOMEIPSDEntry,
         addr: _T_SOCKADDR,
         received_over_multicast: bool,
         unicast_supported: bool,
     ) -> None:
+        # XXX spec is unclear on RequestResponseDelay behavior if new Find is received
+        self.log.info("received from %s: %s", format_address(addr), entry)
         if not self._can_answer_offers:
             # 4.2.1 SWS_SD_00319
             self.log.info(
                 "ignoring FindService from %s during Initial Wait Phase: %s",
-                self.format_address(addr),
+                format_address(addr),
                 entry,
             )
             return
@@ -1141,7 +1152,8 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
             asyncio.get_event_loop().time() - self._last_multicast_offer
         )
         answer_with_multicast = (
-            time_since_last_offer > self.CYCLIC_OFFER_DELAY / 2 or not unicast_supported
+            time_since_last_offer > self.timings.CYCLIC_OFFER_DELAY / 2
+            or not unicast_supported
         )
 
         # 4.2.1 TR_SOMEIP_00419
@@ -1149,7 +1161,8 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
             # 4.2.1 TR_SOMEIP_00420 and TR_SOMEIP_00421
             await asyncio.sleep(
                 random.uniform(
-                    self.REQUEST_RESPONSE_DELAY_MIN, self.REQUEST_RESPONSE_DELAY_MAX,
+                    self.timings.REQUEST_RESPONSE_DELAY_MIN,
+                    self.timings.REQUEST_RESPONSE_DELAY_MAX,
                 )
             )
 
@@ -1175,7 +1188,7 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
             asyncio.create_task(wait_cancelled(self.task))
             self.task = None
 
-            if not self.CYCLIC_OFFER_DELAY:
+            if not self.timings.CYCLIC_OFFER_DELAY:
                 asyncio.get_event_loop().call_soon(
                     functools.partial(
                         self._send_offers, self.announcing_services, stop=True
@@ -1183,49 +1196,45 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
                 )
 
     def connection_lost(self, exc: typing.Optional[Exception]) -> None:
-        log = self.log.exception if exc else self.log.info
-        log("connection lost. stopping announce and _subscription_timeout tasks", exc_info=exc)
         self.stop()
-
-        for addr, subs in self.subscriptions.items():
-            for sub, (listener, handle) in subs.items():
-                if handle:
-                    handle.cancel()
-                listener.client_unsubscribed(sub, addr)
-        self.subscriptions.clear()
+        self.subscriptions.stop_all()
 
     @log_exceptions()
     async def _announce(self) -> None:
         try:
-            if self.TTL is not TTL_FOREVER and (
-                not self.CYCLIC_OFFER_DELAY or self.CYCLIC_OFFER_DELAY >= self.TTL
+            ttl = self.timings.ANNOUNCE_TTL
+            if ttl is not TTL_FOREVER and (
+                not self.timings.CYCLIC_OFFER_DELAY
+                or self.timings.CYCLIC_OFFER_DELAY >= ttl
             ):
                 self.log.warning(
                     "CYCLIC_OFFER_DELAY=%r too short for TTL=%r."
                     " expect connectivity issues",
-                    self.CYCLIC_OFFER_DELAY,
-                    self.TTL,
+                    self.timings.CYCLIC_OFFER_DELAY,
+                    ttl,
                 )
             await asyncio.sleep(
-                random.uniform(self.INITIAL_DELAY_MIN, self.INITIAL_DELAY_MAX)
+                random.uniform(
+                    self.timings.INITIAL_DELAY_MIN, self.timings.INITIAL_DELAY_MAX
+                )
             )
             self._send_offers(self.announcing_services)
 
             try:
                 self._can_answer_offers = True
-                for i in range(self.REPETITIONS_MAX):
-                    await asyncio.sleep((2 ** i) * self.REPETITIONS_BASE_DELAY)
+                for i in range(self.timings.REPETITIONS_MAX):
+                    await asyncio.sleep((2 ** i) * self.timings.REPETITIONS_BASE_DELAY)
                     self._send_offers(self.announcing_services)
 
-                if not self.CYCLIC_OFFER_DELAY:  # 4.2.1 SWS_SD_00451
+                if not self.timings.CYCLIC_OFFER_DELAY:  # 4.2.1 SWS_SD_00451
                     return
 
                 while True:
                     # 4.2.1 SWS_SD_00450
-                    await asyncio.sleep(self.CYCLIC_OFFER_DELAY)
+                    await asyncio.sleep(self.timings.CYCLIC_OFFER_DELAY)
                     self._send_offers(self.announcing_services)
             finally:
-                if self.CYCLIC_OFFER_DELAY:
+                if self.timings.CYCLIC_OFFER_DELAY:
                     self._send_offers(self.announcing_services, stop=True)
         except asyncio.CancelledError:
             pass
@@ -1237,16 +1246,13 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
         stop: bool = False,
     ):
         entries = [
-            s.create_offer_entry(self.TTL if not stop else 0) for s, _ in services
+            s.create_offer_entry(self.timings.ANNOUNCE_TTL if not stop else 0)
+            for s, _ in services
         ]
 
         if not remote:
             self._last_multicast_offer = asyncio.get_event_loop().time()
-        self.send_sd(entries, remote=remote)
+        self.sd.send_sd(entries, remote=remote)
 
     def reboot_detected(self, addr: _T_SOCKADDR) -> None:
-        for subscription, (listener, handle) in self.subscriptions[addr].items():
-            if handle:
-                handle.cancel()
-            listener.client_unsubscribed(subscription, addr)
-        self.subscriptions[addr].clear()
+        self.subscriptions.stop_all_for_address(addr)
