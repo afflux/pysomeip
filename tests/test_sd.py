@@ -255,8 +255,8 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
 
         # send StopOffer => check if service_stopped reaches listener
         mock_single.reset_mock()
-        # also install catchall-listener, but it will only receive service_stopped for 0x5566
-        # as 0x5567 was ignored before
+        # also install catchall-listener, but it will only receive service_stopped for
+        # 0x5566 as 0x5567 was ignored before
         prot.watch_all_services(mock)
 
         prot.datagram_received(data, self.fake_addr, multicast=False)

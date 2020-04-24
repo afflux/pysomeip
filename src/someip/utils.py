@@ -11,8 +11,8 @@ def log_exceptions(msg="unhandled exception in {__func__}"):
     decorator that will catch all exceptions in methods and coroutine methods
     and log them with self.log
 
-    msg will be formatted with __func__ as the called function's __qualname__ plus any passed
-    arguments
+    msg will be formatted with __func__ as the called function's __qualname__ plus any
+    passed arguments
     """
 
     def decorator(f):
@@ -74,8 +74,8 @@ T = typing.TypeVar("T")
 
 
 async def wait_cancelled(task: asyncio.Task[T]) -> typing.Optional[T]:
-    # I'd go with try: await task; except asyncio.CancelledError, but this can not discern between
-    # task raising cancelled or this current task being cancelled.
+    # I'd go with try: await task; except asyncio.CancelledError, but this can not
+    # discern between task raising cancelled or this current task being cancelled.
     await asyncio.gather(task, return_exceptions=True)
     assert task.done()
     if task.cancelled():

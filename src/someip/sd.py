@@ -82,7 +82,8 @@ class SOMEIPDatagramProtocol:
     def datagram_received(self, data, addr: _T_SOCKADDR, multicast: bool) -> None:
         try:
             while data:
-                # 4.2.1, TR_SOMEIP_00140 more than one SOMEIP message per UDP frame allowed
+                # 4.2.1, TR_SOMEIP_00140 more than one SOMEIP message per UDP frame
+                # allowed
                 parsed, data = someip.header.SOMEIPHeader.parse(data)
                 self.message_received(parsed, addr, multicast)
         except someip.header.ParseError as exc:
@@ -129,9 +130,9 @@ class SOMEIPDatagramProtocol:
 
     def send(self, buf: bytes, remote: _T_OPT_SOCKADDR = None):
         # ideally, we'd use transport.write() and have the DGRAM socket connected to the
-        # default_addr. However, after connect() the socket will not be bound to INADDR_ANY
-        # anymore. so we store the multicast address as a default destination address on the
-        # isntance and wrap the send calls with self.send
+        # default_addr. However, after connect() the socket will not be bound to
+        # INADDR_ANY anymore. so we store the multicast address as a default destination
+        # address on the instance and wrap the send calls with self.send
         if self.transport is None:  # pragma: nocover
             self.log.error(
                 "no transport set on %r but tried to send to %r: %r", self, remote, buf
@@ -219,8 +220,8 @@ class _BaseSDProtocol(SOMEIPDatagramProtocol):
         ):
             self.reboot_detected(addr)
 
-        # FIXME this will drop the SD Endpoint options, since they are not referenced by entries
-        # see 4.2.1 TR_SOMEIP_00548
+        # FIXME this will drop the SD Endpoint options, since they are not referenced by
+        # entries. see 4.2.1 TR_SOMEIP_00548
         sdhdr_resolved = sdhdr.resolve_options()
         self.sd_message_received(sdhdr_resolved, addr, multicast)
 
@@ -276,7 +277,8 @@ class _SessionStorage:
 
     def assign_outgoing(self, remote: _T_OPT_SOCKADDR):
         # need a lock for outgoing messages if they may be sent from separate threads
-        # eg. when an application logic runs in a seperate thread from the SOMEIP stack event loop
+        # eg. when an application logic runs in a seperate thread from the SOMEIP stack
+        # event loop
         with self.outgoing_lock:
             flag, _id = self.outgoing[remote]
             if _id >= 0xFFFF:
@@ -328,8 +330,8 @@ class SubscriptionProtocol(_BaseSDProtocol):
     ) -> None:
         """
         eventgroup:
-          someip.config.Eventgroup that describes the eventgroup to subscribe to and the local
-          endpoint that accepts the notifications
+          someip.config.Eventgroup that describes the eventgroup to subscribe to and the
+          local endpoint that accepts the notifications
         endpoint:
           remote SD endpoint that will receive the subscription messages
         """
@@ -337,14 +339,14 @@ class SubscriptionProtocol(_BaseSDProtocol):
         self.subscribeentries.append((eventgroup, endpoint))
 
         if not self.refresh_interval and self.alive:
-            # when TTL=forever, _subscribe() task does not run continuously, so we need to send
-            # individual subscribe entries directly
+            # when TTL=forever, _subscribe() task does not run continuously, so we need
+            # to send individual subscribe entries directly
             asyncio.get_event_loop().call_soon(
                 self._send_start_subscribe, endpoint, [eventgroup]
             )
 
     def stop_subscribe_eventgroup(
-        self, eventgroup: someip.config.Eventgroup, endpoint: _T_SOCKADDR
+        self, eventgroup: someip.config.Eventgroup, endpoint: _T_SOCKADDR,
     ) -> None:
         """
         eventgroup:
@@ -530,13 +532,14 @@ class _BaseMulticastSDProtocol(_BaseSDProtocol):
                 prot.log.warning(
                     "ProactorEventLoop has issues with ipv6 datagram sockets!"
                     " https://bugs.python.org/issue39148. workaround with"
-                    " asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())",
+                    " asyncio.set_event_loop_policy("
+                    "asyncio.WindowsSelectorEventLoopPolicy())",
                 )
 
             # python disallowed SO_REUSEADDR on create_datagram_endpoint.
             # https://bugs.python.org/issue37228
-            # Windows doesnt have SO_REUSEPORT and the problem apparently does not exist for
-            # multicast, so we need to set SO_REUSEADDR on the socket manually
+            # Windows doesnt have SO_REUSEPORT and the problem apparently does not exist
+            # for multicast, so we need to set SO_REUSEADDR on the socket manually
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
             addrinfos = await loop.getaddrinfo(
@@ -620,8 +623,8 @@ class _BaseMulticastSDProtocol(_BaseSDProtocol):
         if not ip_address(multicast_addr).is_multicast:
             raise ValueError("multicast_addr is not multicast")
 
-        # since posix does not provide a portable interface to figure out what address a datagram
-        # was received on, we need one unicast and one multicast socket
+        # since posix does not provide a portable interface to figure out what address a
+        # datagram was received on, we need one unicast and one multicast socket
         prot = cls((str(multicast_addr), port))
 
         trsp_m = await cls._create_endpoint(
@@ -1131,7 +1134,8 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
 
         # 4.2.1 TR_SOMEIP_00423
         # unfortunately the spec is unclear on whether the multicast response should
-        # refresh the CYCLIC_OFFER_DELAY timer when the multicast send condition is fulfilled.
+        # refresh the CYCLIC_OFFER_DELAY timer when the multicast send condition is
+        # fulfilled.
         # => assume no, since that would only work if all services were sent out
         time_since_last_offer = (
             asyncio.get_event_loop().time() - self._last_multicast_offer
@@ -1145,11 +1149,12 @@ class ServiceAnnounceProtocol(_BaseMulticastSDProtocol):
             # 4.2.1 TR_SOMEIP_00420 and TR_SOMEIP_00421
             await asyncio.sleep(
                 random.uniform(
-                    self.REQUEST_RESPONSE_DELAY_MIN, self.REQUEST_RESPONSE_DELAY_MAX
+                    self.REQUEST_RESPONSE_DELAY_MIN, self.REQUEST_RESPONSE_DELAY_MAX,
                 )
             )
 
-        # FIXME spec requires in 4.2.1 SWS_SD_00651 to pack responses to multiple Finds together
+        # FIXME spec requires in 4.2.1 SWS_SD_00651 to pack responses to multiple Finds
+        # together
         if answer_with_multicast:
             self._send_offers(local_services)
         else:

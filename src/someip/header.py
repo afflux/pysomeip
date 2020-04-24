@@ -96,7 +96,8 @@ payload: {len(self.payload)} bytes"""
         return (
             f"service=0x{self.service_id:04x}, method=0x{self.method_id:04x},"
             f" client=0x{self.client_id:04x}, session=0x{self.session_id:04x},"
-            f" protocol={self.protocol_version}, interface=0x{self.interface_version:02x},"
+            f" protocol={self.protocol_version},"
+            f" interface=0x{self.interface_version:02x},"
             f" message={self.message_type.name}, returncode={self.return_code.name},"
             f" payload: {len(self.payload)} bytes"
         )
@@ -280,7 +281,7 @@ class SOMEIPSDEntry:
 
     @property
     def is_stop_offer(self):
-        # Example for a Serialization Protocol (SOME/IP) AUTOSAR Release 4.2.1 TR_SOMEIP_00364
+        # 4.2.1 TR_SOMEIP_00364
         return self.sd_type == SOMEIPSDEntryType.OfferService and self.ttl == 0
 
     @property
@@ -704,7 +705,8 @@ class SOMEIPSDHeader:
 
     def __str__(self):  # pragma: nocover
         entries = "\n".join(str(e) for e in self.entries)
-        return f"reboot={self.flag_reboot}, unicast={self.flag_unicast}, entries:\n{entries}"
+        return f"""reboot={self.flag_reboot}, unicast={self.flag_unicast}, entries:
+{entries}"""
 
     @classmethod
     def parse(cls, buf: bytes) -> typing.Tuple[SOMEIPSDHeader, bytes]:
