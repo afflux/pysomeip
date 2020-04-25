@@ -523,7 +523,7 @@ class SOMEIPSDLoadBalancingOption(SOMEIPSDAbstractOption):
 @dataclasses.dataclass(frozen=True)
 class SOMEIPSDConfigOption(SOMEIPSDAbstractOption):
     type_: typing.ClassVar[int] = 1
-    configs: typing.Sequence[typing.Tuple[str, typing.Optional[str]]]
+    configs: typing.Tuple[typing.Tuple[str, typing.Optional[str]], ...]
 
     @classmethod
     def parse_option(cls, buf: bytes) -> SOMEIPSDConfigOption:
@@ -553,7 +553,7 @@ class SOMEIPSDConfigOption(SOMEIPSDAbstractOption):
                 key, value = cfg_str[:split], cfg_str[split + 1 :]
                 configs.append((key.decode("ascii"), value.decode("ascii")))
             nextlen, b = b[0], b[1:]
-        return cls(configs=configs)
+        return cls(configs=tuple(configs))
 
     def build(self) -> bytes:
         buf = bytearray([0])

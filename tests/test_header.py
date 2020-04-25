@@ -335,20 +335,20 @@ class TestHeader(unittest.IsolatedAsyncioTestCase):
 
     def test_sdoption_config(self):
         payload = b"\x00\x02\x01\x00\x00"
-        option = hdr.SOMEIPSDConfigOption(configs=[])
+        option = hdr.SOMEIPSDConfigOption(configs=())
         self._check(payload, option, hdr.SOMEIPSDOption.parse)
 
         payload = b"\x00\x07\x01\x00\x02AB\x01C\x00"
-        option = hdr.SOMEIPSDConfigOption(configs=[("AB", None), ("C", None)])
+        option = hdr.SOMEIPSDConfigOption(configs=(("AB", None), ("C", None)))
         self._check(payload, option, hdr.SOMEIPSDOption.parse)
 
         payload = b"\x00\x0b\x01\x00\x04AB=X\x03C=Y\x00"
-        option = hdr.SOMEIPSDConfigOption(configs=[("AB", "X"), ("C", "Y")])
+        option = hdr.SOMEIPSDConfigOption(configs=(("AB", "X"), ("C", "Y")))
         self._check(payload, option, hdr.SOMEIPSDOption.parse)
 
         payload = b"\x00\x0e\x01\x00\x04AB=X\x02AB\x03C=Y\x00"
         option = hdr.SOMEIPSDConfigOption(
-            configs=[("AB", "X"), ("AB", None), ("C", "Y")]
+            configs=(("AB", "X"), ("AB", None), ("C", "Y"))
         )
         self._check(payload, option, hdr.SOMEIPSDOption.parse)
 
