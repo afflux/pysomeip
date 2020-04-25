@@ -526,7 +526,9 @@ class ServiceDiscoveryProtocol(SOMEIPDatagramProtocol):
                 )
                 continue
 
-            if entry.sd_type == someip.header.SOMEIPSDEntryType.Subscribe:
+            if (  # pragma: nobranch
+                entry.sd_type == someip.header.SOMEIPSDEntryType.Subscribe
+            ):
                 if multicast:
                     self.log.warning(
                         "discarding subscribe received over multicast from %s: %s",
@@ -536,10 +538,6 @@ class ServiceDiscoveryProtocol(SOMEIPDatagramProtocol):
                     continue
                 asyncio.create_task(self.announcer.handle_subscribe(entry, addr))
                 continue
-
-            self.log.info(
-                "received unexpected from %s: %s", format_address(addr), entry
-            )
 
 
 class ServiceSubscriber:

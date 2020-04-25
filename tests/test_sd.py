@@ -172,7 +172,7 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
             _mock.reset_mock()
 
             if i < 0x10020:
-                prot.send_sd([entry], self.multi_addr)
+                prot.send_sd([entry])
                 _mock.sendto.assert_called_once_with(
                     pack_sd((entry,), session_id=i & 0xFFFF, reboot=i < 0x10000),
                     self.multi_addr,
@@ -373,6 +373,101 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(discover().method_calls, [])
         self.assertEqual(subscribe().method_calls, [])
         self.assertEqual(announce().method_calls, [])
+
+    @unittest.mock.patch("someip.sd.ServiceAnnouncer", spec_set=True)
+    @unittest.mock.patch("someip.sd.ServiceSubscriber", spec_set=True)
+    @unittest.mock.patch("someip.sd.ServiceDiscover", spec_set=True)
+    async def test_sd_entries(self, discover, subscribe, announce):
+        prot = sd.ServiceDiscoveryProtocol(self.multi_addr)
+
+        find_entry = hdr.SOMEIPSDEntry(
+            sd_type=hdr.SOMEIPSDEntryType.FindService,
+            service_id=0x5566,
+            instance_id=0xFFFF,
+            major_version=0xFF,
+            ttl=5,
+            minver_or_counter=0xFFFFFFFF,
+        )
+
+        offer_entry = hdr.SOMEIPSDEntry(
+            sd_type=hdr.SOMEIPSDEntryType.OfferService,
+            service_id=0x1111,
+            instance_id=0x2222,
+            major_version=1,
+            ttl=0,
+            minver_or_counter=0xDEADBEEF,
+            options_1=(
+                hdr.IPv4EndpointOption(
+                    address=ipaddress.IPv4Address("254.253.252.251"),
+                    l4proto=hdr.L4Protocols.UDP,
+                    port=65535,
+                ),
+            ),
+        )
+
+        subscribe_entry = hdr.SOMEIPSDEntry(
+            sd_type=hdr.SOMEIPSDEntryType.Subscribe,
+            service_id=0xAAAA,
+            instance_id=0xBBBB,
+            major_version=0xCC,
+            minver_or_counter=0x23333,
+            ttl=1,
+            options_1=(
+                hdr.IPv6EndpointOption(
+                    ipaddress.IPv6Address("2001:db8::2"),
+                    port=1,
+                    l4proto=hdr.L4Protocols.UDP,
+                ),
+            ),
+            options_2=(hdr.SOMEIPSDConfigOption(configs=(("foo", "bar"),)),),
+        )
+
+        entries = (
+            find_entry,
+            offer_entry,
+            subscribe_entry,
+        )
+
+        prot.datagram_received(pack_sd(entries), self.fake_addr, multicast=False)
+        await settle()
+
+        self.assertEqual(subscribe().method_calls, [])
+        self.assertEqual(
+            discover().method_calls,
+            [unittest.mock.call.handle_offer(offer_entry, self.fake_addr)],
+        )
+        self.assertCountEqual(
+            announce().method_calls,
+            [
+                unittest.mock.call.handle_findservice(
+                    find_entry, self.fake_addr, False, True
+                ),
+                unittest.mock.call.handle_subscribe(subscribe_entry, self.fake_addr),
+            ],
+        )
+
+        discover().reset_mock()
+        subscribe().reset_mock()
+        announce().reset_mock()
+
+        with self.assertLogs("someip.sd", "WARNING") as cm:
+            prot.datagram_received(pack_sd(entries), self.fake_addr, multicast=True)
+            await settle()
+        self.assertTrue(any("received over multicast" in msg for msg in cm.output))
+
+        self.assertEqual(subscribe().method_calls, [])
+        self.assertEqual(
+            discover().method_calls,
+            [unittest.mock.call.handle_offer(offer_entry, self.fake_addr)],
+        )
+        self.assertEqual(
+            announce().method_calls,
+            [
+                unittest.mock.call.handle_findservice(
+                    find_entry, self.fake_addr, True, True
+                ),
+            ],
+        )
 
     async def test_sd_multicast_bad_af(self):
         with self.assertRaises(ValueError):
@@ -700,10 +795,13 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase, _SendTiming):
         )
         mock_sd.log = logging.getLogger("someip.sd")
         self._mock_send_sd = mock_sd.send_sd = unittest.mock.Mock()
-        self._mock_subscriber = mock_sd.subscriber.subscribe_eventgroup
+        self._mock_subscribe_start = mock_sd.subscriber.subscribe_eventgroup
+        self._mock_subscribe_stop = mock_sd.subscriber.stop_subscribe_eventgroup
         self.prot = sd.ServiceDiscover(mock_sd)
 
-        self.setup_timing(self._mock_send_sd, self._mock_subscriber)
+        self.setup_timing(
+            self._mock_send_sd, self._mock_subscribe_start, self._mock_subscribe_stop
+        )
 
     async def test_send_find(self):
         mock = unittest.mock.Mock()
@@ -883,6 +981,7 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase, _SendTiming):
 
         self.prot.handle_offer(data, self.fake_addr)
 
+        await asyncio.sleep(data.ttl + 0.001)
         await t
 
         find = hdr.SOMEIPSDEntry(
@@ -904,7 +1003,16 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase, _SendTiming):
 
         self.assertTiming(
             (0.2, self._mock_send_sd, unittest.mock.call([find])),
-            (0.25, self._mock_subscriber, unittest.mock.call(evgrp, self.fake_addr)),
+            (
+                0.25,
+                self._mock_subscribe_start,
+                unittest.mock.call(evgrp, self.fake_addr),
+            ),
+            (
+                1.25,
+                self._mock_subscribe_stop,
+                unittest.mock.call(evgrp, self.fake_addr, send=False),
+            ),
         )
 
 
@@ -1029,13 +1137,11 @@ class TestSubscribeEventgroupTTL3(TestSubscribeEventgroup):
         self._mock_send_sd.reset_mock()
 
         # remove last eventgroup of endpoint, send stop subscribe
-        self.prot.stop_subscribe_eventgroup(self.evgrp_3, self.remote1_addr)
+        self.prot.stop_subscribe_eventgroup(self.evgrp_3, self.remote1_addr, send=False)
 
         await settle()
 
-        self._mock_send_sd.assert_called_once_with(
-            [self.stop_sub_evgrp_3], remote=self.remote1_addr,
-        )
+        self._mock_send_sd.assert_not_called()
         self._mock_send_sd.reset_mock()
 
         # show changed subscription messages after stop
