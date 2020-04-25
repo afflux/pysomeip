@@ -142,34 +142,6 @@ class SOMEIPDatagramProtocol:
         # workaround for https://github.com/python/typeshed/pull/3943
         self.transport.sendto(buf, remote)  # type: ignore[arg-type]
 
-    def send_sd(
-        self,
-        entries: typing.Collection[someip.header.SOMEIPSDEntry],
-        remote: _T_OPT_SOCKADDR = None,
-    ) -> None:
-        if not entries:
-            return
-        flag_reboot, session_id = self.session_storage.assign_outgoing(remote)
-
-        msg = someip.header.SOMEIPSDHeader(
-            flag_reboot=flag_reboot,
-            flag_unicast=True,  # 4.2.1, TR_SOMEIP_00540 receiving unicast is supported
-            entries=tuple(entries),
-        )
-        msg_assigned = msg.assign_option_indexes()
-
-        hdr = someip.header.SOMEIPHeader(
-            service_id=someip.header.SD_SERVICE,
-            method_id=someip.header.SD_METHOD,
-            client_id=0,
-            session_id=session_id,
-            interface_version=1,
-            message_type=someip.header.SOMEIPMessageType.NOTIFICATION,
-            payload=msg_assigned.build(),
-        )
-
-        self.send(hdr.build(), remote)
-
 
 class DatagramProtocolAdapter(asyncio.DatagramProtocol):
     def __init__(self, protocol: SOMEIPDatagramProtocol, is_multicast: bool):
@@ -188,62 +160,6 @@ class DatagramProtocolAdapter(asyncio.DatagramProtocol):
         self, exc: typing.Optional[Exception]
     ) -> None:  # pragma: nocover
         self.protocol.connection_lost(exc)
-
-
-class _BaseSDProtocol(SOMEIPDatagramProtocol):
-    def __init__(self, logger: str):
-        super().__init__(logger=logger)
-
-    def message_received(
-        self,
-        someip_message: someip.header.SOMEIPHeader,
-        addr: _T_SOCKADDR,
-        multicast: bool,
-    ) -> None:
-        if (
-            someip_message.service_id != someip.header.SD_SERVICE
-            or someip_message.method_id != someip.header.SD_METHOD
-            or someip_message.interface_version != someip.header.SD_INTERFACE_VERSION
-            or someip_message.return_code != someip.header.SOMEIPReturnCode.E_OK
-            or someip_message.message_type
-            != someip.header.SOMEIPMessageType.NOTIFICATION
-        ):
-            self.log.error("SD protocol received non-SD message: %s", someip_message)
-            return
-
-        try:
-            sdhdr, rest = someip.header.SOMEIPSDHeader.parse(someip_message.payload)
-        except someip.header.ParseError as exc:
-            self.log.error("SD-message did not parse: %r", exc)
-            return
-
-        if self.session_storage.check_received(
-            addr, multicast, sdhdr.flag_reboot, someip_message.session_id
-        ):
-            self.reboot_detected(addr)
-
-        # FIXME this will drop the SD Endpoint options, since they are not referenced by
-        # entries. see 4.2.1 TR_SOMEIP_00548
-        sdhdr_resolved = sdhdr.resolve_options()
-        self.sd_message_received(sdhdr_resolved, addr, multicast)
-
-        if rest:  # pragma: nocover
-            self.log.warning(
-                "unparsed data after SD from %s: %r", format_address(addr), rest
-            )
-
-    def sd_message_received(
-        self, sdhdr: someip.header.SOMEIPSDHeader, addr: _T_SOCKADDR, multicast: bool
-    ) -> None:
-        """
-        called when a well-formed SOME/IP SD message was received
-        """
-        raise NotImplementedError  # pragma: nocover
-
-    def reboot_detected(self, addr: _T_SOCKADDR) -> None:
-        """
-        called when a rebooted endpoint was detected
-        """
 
 
 class _SessionStorage:
@@ -465,7 +381,7 @@ class Timings:
     )  # in seconds
 
 
-class ServiceDiscoveryProtocol(_BaseSDProtocol):
+class ServiceDiscoveryProtocol(SOMEIPDatagramProtocol):
     @classmethod
     async def _create_endpoint(
         cls,
@@ -650,6 +566,72 @@ class ServiceDiscoveryProtocol(_BaseSDProtocol):
         self.discovery = ServiceDiscover(self)
         self.subscriber = ServiceSubscriber(self)
         self.announcer = ServiceAnnouncer(self)
+
+    def message_received(
+        self,
+        someip_message: someip.header.SOMEIPHeader,
+        addr: _T_SOCKADDR,
+        multicast: bool,
+    ) -> None:
+        if (
+            someip_message.service_id != someip.header.SD_SERVICE
+            or someip_message.method_id != someip.header.SD_METHOD
+            or someip_message.interface_version != someip.header.SD_INTERFACE_VERSION
+            or someip_message.return_code != someip.header.SOMEIPReturnCode.E_OK
+            or someip_message.message_type
+            != someip.header.SOMEIPMessageType.NOTIFICATION
+        ):
+            self.log.error("SD protocol received non-SD message: %s", someip_message)
+            return
+
+        try:
+            sdhdr, rest = someip.header.SOMEIPSDHeader.parse(someip_message.payload)
+        except someip.header.ParseError as exc:
+            self.log.error("SD-message did not parse: %r", exc)
+            return
+
+        if self.session_storage.check_received(
+            addr, multicast, sdhdr.flag_reboot, someip_message.session_id
+        ):
+            self.reboot_detected(addr)
+
+        # FIXME this will drop the SD Endpoint options, since they are not referenced by
+        # entries. see 4.2.1 TR_SOMEIP_00548
+        sdhdr_resolved = sdhdr.resolve_options()
+        self.sd_message_received(sdhdr_resolved, addr, multicast)
+
+        if rest:  # pragma: nocover
+            self.log.warning(
+                "unparsed data after SD from %s: %r", format_address(addr), rest
+            )
+
+    def send_sd(
+        self,
+        entries: typing.Collection[someip.header.SOMEIPSDEntry],
+        remote: _T_OPT_SOCKADDR = None,
+    ) -> None:
+        if not entries:
+            return
+        flag_reboot, session_id = self.session_storage.assign_outgoing(remote)
+
+        msg = someip.header.SOMEIPSDHeader(
+            flag_reboot=flag_reboot,
+            flag_unicast=True,  # 4.2.1, TR_SOMEIP_00540 receiving unicast is supported
+            entries=tuple(entries),
+        )
+        msg_assigned = msg.assign_option_indexes()
+
+        hdr = someip.header.SOMEIPHeader(
+            service_id=someip.header.SD_SERVICE,
+            method_id=someip.header.SD_METHOD,
+            client_id=0,
+            session_id=session_id,
+            interface_version=1,
+            message_type=someip.header.SOMEIPMessageType.NOTIFICATION,
+            payload=msg_assigned.build(),
+        )
+
+        self.send(hdr.build(), remote)
 
     def connection_lost(self, exc: typing.Optional[Exception]) -> None:
         log = self.log.exception if exc else self.log.info

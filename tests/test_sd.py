@@ -153,7 +153,7 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
     async def test_send_session_id(self):
         entry = cfg.Service(service_id=0x1234).create_find_entry()
 
-        prot = sd.SOMEIPDatagramProtocol()
+        prot = sd.ServiceDiscoveryProtocol(self.multi_addr)
         _mock = prot.transport = unittest.mock.Mock()
 
         # session_id wraps to 1 instead of 0
@@ -182,7 +182,7 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
                 await settle()
 
     async def test_no_send_empty_sd(self):
-        prot = sd.SOMEIPDatagramProtocol()
+        prot = sd.ServiceDiscoveryProtocol(self.multi_addr)
         _mock = prot.transport = unittest.mock.Mock()
 
         prot.send_sd([])
