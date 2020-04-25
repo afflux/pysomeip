@@ -312,7 +312,7 @@ class ServiceDiscoveryProtocol(SOMEIPDatagramProtocol):
             )
         else:  # pragma: nocover
             raise NotImplementedError(
-                f"unsupported platform {os.name=} {platform.system()=}"
+                f"unsupported platform {os.name} {platform.system()}"
             )
 
         sock = trsp.get_extra_info("socket")
@@ -480,14 +480,14 @@ class ServiceDiscoveryProtocol(SOMEIPDatagramProtocol):
     def connection_lost(self, exc: typing.Optional[Exception]) -> None:
         log = self.log.exception if exc else self.log.info
         log("connection lost. stopping all child tasks", exc_info=exc)
-        self.subscriber.connection_lost(exc)
-        self.discovery.connection_lost(exc)
-        self.announcer.connection_lost(exc)
+        asyncio.get_event_loop().call_soon(self.subscriber.connection_lost, exc)
+        asyncio.get_event_loop().call_soon(self.discovery.connection_lost, exc)
+        asyncio.get_event_loop().call_soon(self.announcer.connection_lost, exc)
 
     def reboot_detected(self, addr: _T_SOCKADDR) -> None:
-        self.subscriber.reboot_detected(addr)
-        self.discovery.reboot_detected(addr)
-        self.announcer.reboot_detected(addr)
+        asyncio.get_event_loop().call_soon(self.subscriber.reboot_detected, addr)
+        asyncio.get_event_loop().call_soon(self.discovery.reboot_detected, addr)
+        asyncio.get_event_loop().call_soon(self.announcer.reboot_detected, addr)
 
     def sd_message_received(
         self, sdhdr: someip.header.SOMEIPSDHeader, addr: _T_SOCKADDR, multicast: bool

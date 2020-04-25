@@ -81,7 +81,9 @@ class _SendTiming(unittest.TestCase):
 
 
 async def settle():
-    await asyncio.sleep(0.000001)
+    fut = asyncio.Future()
+    asyncio.get_event_loop().call_soon(fut.set_result, None)
+    await fut
 
 
 # }}}
@@ -189,114 +191,113 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
 
         _mock.assert_not_called()
 
-    async def test_offer_start(self):
+    @unittest.mock.patch("someip.sd.ServiceAnnouncer", spec_set=True)
+    @unittest.mock.patch("someip.sd.ServiceSubscriber", spec_set=True)
+    @unittest.mock.patch("someip.sd.ServiceDiscover", spec_set=True)
+    async def test_sd_connection_lost(self, discover, subscribe, announce):
         prot = sd.ServiceDiscoveryProtocol(self.multi_addr)
 
-        payload = (
-            b"\x40\x00\x00\x00"
-            b"\x00\x00\x00\x20"
-            b"\x01\x01\x01\x01\x55\x66\x77\x88\x99\x00\x00\x01\xde\xad\xbe\xef"
-            b"\x01\x01\x01\x01\x55\x67\x77\x88\x99\x00\x00\x01\xde\xad\xbe\xef"
-            b"\x00\x00\x00\x20"
-            b"\x00\x09\x04\x00\x01\x02\x03\x04\x00\x11\x07\xff"
-            b"\x00\x09\x04\x00\xfe\xfd\xfc\xfb\x00\x11\xff\xff"
-            b"\x00\x05\x02\x00\x22\x22\x33\x33"
+        await settle()
+
+        self.assertEqual(discover().method_calls, [])
+        self.assertEqual(subscribe().method_calls, [])
+        self.assertEqual(announce().method_calls, [])
+
+        sentinel = object()
+
+        with self.assertLogs("someip.sd", "ERROR") as cm:
+            prot.connection_lost(sentinel)
+            await settle()
+        self.assertTrue(any("connection lost" in msg for msg in cm.output))
+
+        self.assertEqual(
+            discover().method_calls, [unittest.mock.call.connection_lost(sentinel)]
+        )
+        self.assertEqual(
+            subscribe().method_calls, [unittest.mock.call.connection_lost(sentinel)]
+        )
+        self.assertEqual(
+            announce().method_calls, [unittest.mock.call.connection_lost(sentinel)]
         )
 
-        data = hdr.SOMEIPHeader(
-            service_id=hdr.SD_SERVICE,
-            method_id=hdr.SD_METHOD,
-            client_id=0,
-            session_id=1,
-            interface_version=hdr.SD_INTERFACE_VERSION,
-            message_type=hdr.SOMEIPMessageType.NOTIFICATION,
-            payload=payload,
-        ).build()
+        discover().reset_mock()
+        subscribe().reset_mock()
+        announce().reset_mock()
 
-        mock = unittest.mock.Mock()
-        mock_single = unittest.mock.Mock()
-        prot.discovery.watch_service(cfg.Service(service_id=0x5566), mock_single)
+        await settle()
 
-        prot.datagram_received(data, self.fake_addr, multicast=False)
+        self.assertEqual(discover().method_calls, [])
+        self.assertEqual(subscribe().method_calls, [])
+        self.assertEqual(announce().method_calls, [])
 
+    @unittest.mock.patch("someip.sd.ServiceAnnouncer", spec_set=True)
+    @unittest.mock.patch("someip.sd.ServiceSubscriber", spec_set=True)
+    @unittest.mock.patch("someip.sd.ServiceDiscover", spec_set=True)
+    async def test_sd_reboot(self, discover, subscribe, announce):
+        prot = sd.ServiceDiscoveryProtocol(self.multi_addr)
+
+        prot.datagram_received(
+            pack_sd((), session_id=1, reboot=True), self.fake_addr, multicast=True
+        )
+        await settle()
+
+        self.assertEqual(discover().method_calls, [])
+        self.assertEqual(subscribe().method_calls, [])
+        self.assertEqual(announce().method_calls, [])
+
+        prot.datagram_received(
+            pack_sd((), session_id=2, reboot=True), self.fake_addr, multicast=True
+        )
+        await settle()
+
+        self.assertEqual(discover().method_calls, [])
+        self.assertEqual(subscribe().method_calls, [])
+        self.assertEqual(announce().method_calls, [])
+
+        prot.datagram_received(
+            pack_sd((), session_id=1, reboot=False), self.fake_addr, multicast=True
+        )
+        await settle()
+
+        self.assertEqual(discover().method_calls, [])
+        self.assertEqual(subscribe().method_calls, [])
+        self.assertEqual(announce().method_calls, [])
+
+        prot.datagram_received(
+            pack_sd((), session_id=2, reboot=True), self.fake_addr, multicast=True
+        )
         await settle()
 
         self.assertEqual(
-            mock_single.service_offered.call_args_list,
-            [
-                unittest.mock.call(
-                    cfg.Service(
-                        service_id=0x5566,
-                        instance_id=0x7788,
-                        major_version=0x99,
-                        minor_version=0xDEADBEEF,
-                        options_2=(
-                            hdr.IPv4EndpointOption(
-                                address=ipaddress.IPv4Address("254.253.252.251"),
-                                l4proto=hdr.L4Protocols.UDP,
-                                port=65535,
-                            ),
-                        ),
-                    ),
-                    self.fake_addr,
-                )
-            ],
+            discover().method_calls,
+            [unittest.mock.call.reboot_detected(self.fake_addr)],
+        )
+        self.assertEqual(
+            subscribe().method_calls,
+            [unittest.mock.call.reboot_detected(self.fake_addr)],
+        )
+        self.assertEqual(
+            announce().method_calls,
+            [unittest.mock.call.reboot_detected(self.fake_addr)],
         )
 
-        mock_single.service_stopped.assert_not_called()
+        discover().reset_mock()
+        subscribe().reset_mock()
+        announce().reset_mock()
 
-        payload = (
-            b"\x40\x00\x00\x00"
-            b"\x00\x00\x00\x20"
-            b"\x01\x00\x00\x00\x55\x66\x77\x88\x99\x00\x00\x00\xde\xad\xbe\xef"
-            b"\x01\x00\x00\x00\x55\x67\x77\x88\x99\x00\x00\x00\xde\xad\xbe\xef"
-            b"\x00\x00\x00\x00"
+        prot.datagram_received(
+            pack_sd((), session_id=1, reboot=False), self.fake_addr, multicast=True
         )
-
-        data = hdr.SOMEIPHeader(
-            service_id=hdr.SD_SERVICE,
-            method_id=hdr.SD_METHOD,
-            client_id=0,
-            session_id=1,
-            interface_version=hdr.SD_INTERFACE_VERSION,
-            message_type=hdr.SOMEIPMessageType.NOTIFICATION,
-            payload=payload,
-        ).build()
-
-        # send StopOffer => check if service_stopped reaches listener
-        mock_single.reset_mock()
-        # also install catchall-listener, but it will only receive service_stopped for
-        # 0x5566 as 0x5567 was ignored before
-        prot.discovery.watch_all_services(mock)
-
-        prot.datagram_received(data, self.fake_addr, multicast=False)
-
         await settle()
 
-        mock.service_offered.assert_not_called()
-        mock_single.service_offered.assert_not_called()
+        self.assertEqual(discover().method_calls, [])
+        self.assertEqual(subscribe().method_calls, [])
+        self.assertEqual(announce().method_calls, [])
 
-        mock.service_stopped.assert_called_once_with(
-            cfg.Service(
-                service_id=0x5566,
-                instance_id=0x7788,
-                major_version=0x99,
-                minor_version=0xDEADBEEF,
-            ),
-            self.fake_addr,
-        )
-
-        mock_single.service_stopped.assert_called_once_with(
-            cfg.Service(
-                service_id=0x5566,
-                instance_id=0x7788,
-                major_version=0x99,
-                minor_version=0xDEADBEEF,
-            ),
-            self.fake_addr,
-        )
-
-    async def test_sd_malformed(self):
+    @unittest.mock.patch("someip.sd.ServiceAnnouncer", spec_set=True)
+    @unittest.mock.patch("someip.sd.ServiceSubscriber", spec_set=True)
+    @unittest.mock.patch("someip.sd.ServiceDiscover", spec_set=True)
+    async def test_sd_malformed(self, discover, subscribe, announce):
         prot = sd.ServiceDiscoveryProtocol(self.multi_addr)
 
         msg = hdr.SOMEIPHeader(
@@ -368,6 +369,10 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
             )
 
         prot.sd_message_received.assert_not_called()
+
+        self.assertEqual(discover().method_calls, [])
+        self.assertEqual(subscribe().method_calls, [])
+        self.assertEqual(announce().method_calls, [])
 
     async def test_sd_multicast_bad_af(self):
         with self.assertRaises(ValueError):
@@ -530,6 +535,15 @@ class TestSDDiscoveryTTLForever(_BaseSDDiscoveryTest):
             self.mock_single.method_calls,
             [unittest.mock.call.service_stopped(self.cfg_offer_5566, self.fake_addr)],
         )
+
+    async def test_sd_ignore(self):
+        self.prot.watcher_all_services.remove(self.mock)
+        offer_7777 = replace(self.offer_5566, service_id=0x7777)
+        self.prot.handle_offer(offer_7777, self.fake_addr)
+
+        await settle()
+
+        self.assertEqual(self.mock.method_calls, [])
 
 
 class TestSDDiscoveryTTL1(_BaseSDDiscoveryTest):
