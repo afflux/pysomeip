@@ -308,7 +308,7 @@ class ServiceSubscriber:
         ttl = self.timings.SUBSCRIBE_TTL
         refresh_interval = self.timings.SUBSCRIBE_REFRESH_INTERVAL
 
-        if not refresh_interval and ttl:  # pragma: nocover
+        if not refresh_interval and ttl < TTL_FOREVER:  # pragma: nocover
             self.log.warning(
                 "no refresh, but ttl=%r set. expect lost connection after ttl", ttl
             )
@@ -450,16 +450,19 @@ class ServiceSubscriber:
 
 @dataclasses.dataclass()
 class Timings:
-    INITIAL_DELAY_MIN = 0.0  # in seconds
-    INITIAL_DELAY_MAX = 3  # in seconds
-    REQUEST_RESPONSE_DELAY_MIN = 0.01  # in seconds
-    REQUEST_RESPONSE_DELAY_MAX = 0.05  # in seconds
-    REPETITIONS_MAX = 3
-    REPETITIONS_BASE_DELAY = 0.01  # in seconds
-    CYCLIC_OFFER_DELAY = 1  # in seconds
-    ANNOUNCE_TTL = 3  # in seconds
-    SUBSCRIBE_TTL = 5  # in seconds
-    SUBSCRIBE_REFRESH_INTERVAL: typing.Optional[int] = 3  # in seconds
+    INITIAL_DELAY_MIN: float = dataclasses.field(default=0.0)  # in seconds
+    INITIAL_DELAY_MAX: float = dataclasses.field(default=3)  # in seconds
+    REQUEST_RESPONSE_DELAY_MIN: float = dataclasses.field(default=0.01)  # in seconds
+    REQUEST_RESPONSE_DELAY_MAX: float = dataclasses.field(default=0.05)  # in seconds
+    REPETITIONS_MAX: int = dataclasses.field(default=3)
+    REPETITIONS_BASE_DELAY: float = dataclasses.field(default=0.01)  # in seconds
+    CYCLIC_OFFER_DELAY: float = dataclasses.field(default=1)  # in seconds
+    FIND_TTL: int = dataclasses.field(default=3)  # in seconds
+    ANNOUNCE_TTL: int = dataclasses.field(default=3)  # in seconds
+    SUBSCRIBE_TTL: int = dataclasses.field(default=5)  # in seconds
+    SUBSCRIBE_REFRESH_INTERVAL: typing.Optional[float] = dataclasses.field(
+        default=3
+    )  # in seconds
 
 
 class ServiceDiscoveryProtocol(_BaseSDProtocol):
@@ -676,7 +679,7 @@ class ServiceDiscoveryProtocol(_BaseSDProtocol):
         for entry in sdhdr.entries:
             if entry.sd_type == someip.header.SOMEIPSDEntryType.OfferService:
                 asyncio.get_event_loop().call_soon(
-                    self.discovery.handle_offer, addr, entry
+                    self.discovery.handle_offer, entry, addr
                 )
                 continue
 
@@ -711,12 +714,6 @@ class ServiceDiscoveryProtocol(_BaseSDProtocol):
             self.log.info(
                 "received unexpected from %s: %s", format_address(addr), entry
             )
-
-    def find_subscribe_eventgroup(self, eventgroup: someip.config.Eventgroup):
-        self.discovery.watch_service(
-            eventgroup.as_service(),
-            AutoSubscribeServiceListener(self.subscriber, eventgroup),
-        )
 
 
 class ClientServiceListener:
@@ -799,7 +796,7 @@ class TimedStore(typing.Generic[KT]):
         timeout_handle = None
         if ttl != TTL_FOREVER:
             timeout_handle = asyncio.get_event_loop().call_later(
-                ttl, self._expired, address, address
+                ttl, self._expired, address, entry
             )
 
         self.store[address][entry] = (callback_expired, timeout_handle)
@@ -859,7 +856,7 @@ class ServiceDiscover:
         self.found_services: TimedStore[someip.config.Service] = TimedStore(self.log)
 
     def handle_offer(
-        self, addr: _T_SOCKADDR, entry: someip.header.SOMEIPSDEntry
+        self, entry: someip.header.SOMEIPSDEntry, addr: _T_SOCKADDR
     ) -> None:
         if not self.is_watching_service(entry):
             return
@@ -881,6 +878,12 @@ class ServiceDiscover:
     def watch_all_services(self, listener: ClientServiceListener) -> None:
         self.watcher_all_services.add(listener)
 
+    def find_subscribe_eventgroup(self, eventgroup: someip.config.Eventgroup):
+        self.watch_service(
+            eventgroup.as_service(),
+            AutoSubscribeServiceListener(self.sd.subscriber, eventgroup),
+        )
+
     def _service_found(self, service: someip.config.Service) -> bool:
         return any(service.matches_service(s) for s in self.found_services.entries())
 
@@ -890,7 +893,7 @@ class ServiceDiscover:
 
         def _build_entries():
             return [
-                service.create_find_entry()
+                service.create_find_entry(self.timings.FIND_TTL)
                 for service in self.watched_services.keys()
                 if not self._service_found(service)  # 4.2.1: SWS_SD_00365
             ]
@@ -948,13 +951,9 @@ class ServiceDiscover:
         for service_filter, listeners in self.watched_services.items():
             if service_filter.matches_service(service):
                 for listener in listeners:
-                    asyncio.get_event_loop().call_soon(
-                        listener.service_offered, service, source
-                    )
+                    listener.service_offered(service, source)
         for listener in self.watcher_all_services:
-            asyncio.get_event_loop().call_soon(
-                listener.service_offered, service, source
-            )
+            listener.service_offered(service, source)
 
     def _notify_service_stopped(
         self, service: someip.config.Service, source: _T_SOCKADDR
@@ -962,13 +961,9 @@ class ServiceDiscover:
         for service_filter, listeners in self.watched_services.items():
             if service_filter.matches_service(service):
                 for listener in listeners:
-                    asyncio.get_event_loop().call_soon(
-                        listener.service_stopped, service, source
-                    )
+                    listener.service_stopped(service, source)
         for listener in self.watcher_all_services:
-            asyncio.get_event_loop().call_soon(
-                listener.service_stopped, service, source
-            )
+            listener.service_stopped(service, source)
 
 
 @dataclasses.dataclass(frozen=True)
