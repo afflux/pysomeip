@@ -297,7 +297,7 @@ class TestHeader(unittest.IsolatedAsyncioTestCase):
 
     def test_sdoption_unknown(self):
         payload = b"\x00\x03\xFFABC"
-        option = hdr.SOMEIPSDUnknownOption(type_=0xFF, payload=b"ABC")
+        option = hdr.SOMEIPSDUnknownOption(type=0xFF, payload=b"ABC")
         self._check(payload, option, hdr.SOMEIPSDOption.parse)
 
     def test_sdoption_loadbal(self):

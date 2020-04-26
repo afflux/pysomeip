@@ -448,13 +448,15 @@ class SOMEIPSDEntry:
 
 class SOMEIPSDOption:
     __format: typing.ClassVar[struct.Struct] = struct.Struct("!HB")
-    options: typing.Dict[int, typing.Type[SOMEIPSDAbstractOption]] = {}
+    _options: typing.ClassVar[
+        typing.Dict[int, typing.Type[SOMEIPSDAbstractOption]]
+    ] = {}
 
     @classmethod
     def register(
         cls, option_cls: typing.Type[SOMEIPSDAbstractOption]
     ) -> typing.Type[SOMEIPSDAbstractOption]:
-        cls.options[option_cls.type_] = option_cls
+        cls._options[option_cls._type] = option_cls
         return option_cls
 
     @classmethod
@@ -466,9 +468,9 @@ class SOMEIPSDOption:
             )
         opt_b, buf_rest = buf_rest[:len_b], buf_rest[len_b:]
 
-        opt_cls = cls.options.get(type_b)
+        opt_cls = cls._options.get(type_b)
         if not opt_cls:
-            return SOMEIPSDUnknownOption(type_=type_b, payload=opt_b), buf_rest
+            return SOMEIPSDUnknownOption(type=type_b, payload=opt_b), buf_rest
 
         return opt_cls.parse_option(opt_b), buf_rest
 
@@ -481,15 +483,19 @@ class SOMEIPSDOption:
 
 @dataclasses.dataclass(frozen=True)
 class SOMEIPSDUnknownOption(SOMEIPSDOption):
-    type_: int
+    type: int
     payload: bytes
 
+    @property
+    def _type(self):
+        return self.type
+
     def build(self) -> bytes:
-        return self.build_option(self.type_, self.payload)
+        return self.build_option(self._type, self.payload)
 
 
 class SOMEIPSDAbstractOption(SOMEIPSDOption):
-    type_: typing.ClassVar[int]
+    _type: typing.ClassVar[int]
 
     @classmethod
     def parse_option(cls, buf: bytes) -> SOMEIPSDAbstractOption:
@@ -499,7 +505,7 @@ class SOMEIPSDAbstractOption(SOMEIPSDOption):
 @SOMEIPSDOption.register
 @dataclasses.dataclass(frozen=True)
 class SOMEIPSDLoadBalancingOption(SOMEIPSDAbstractOption):
-    type_: typing.ClassVar[int] = 2
+    _type: typing.ClassVar[int] = 2
     priority: int
     weight: int
 
@@ -515,14 +521,14 @@ class SOMEIPSDLoadBalancingOption(SOMEIPSDAbstractOption):
 
     def build(self) -> bytes:
         return self.build_option(
-            self.type_, struct.pack("!BHH", 0, self.priority, self.weight)
+            self._type, struct.pack("!BHH", 0, self.priority, self.weight)
         )
 
 
 @SOMEIPSDOption.register
 @dataclasses.dataclass(frozen=True)
 class SOMEIPSDConfigOption(SOMEIPSDAbstractOption):
-    type_: typing.ClassVar[int] = 1
+    _type: typing.ClassVar[int] = 1
     configs: typing.Tuple[typing.Tuple[str, typing.Optional[str]], ...]
 
     @classmethod
@@ -567,7 +573,7 @@ class SOMEIPSDConfigOption(SOMEIPSDAbstractOption):
                 buf.append(len(k))
                 buf += k.encode("ascii")
         buf.append(0)
-        return self.build_option(self.type_, buf)
+        return self.build_option(self._type, buf)
 
 
 class L4Protocols(enum.IntEnum):
@@ -603,7 +609,7 @@ class AbstractIPOption(SOMEIPSDAbstractOption, typing.Generic[T]):
 
     def build(self) -> bytes:
         payload = self._format.pack(0, self.address.packed, 0, self.l4proto, self.port)
-        return self.build_option(self.type_, payload)
+        return self.build_option(self._type, payload)
 
     async def addrinfo(self):
         addr = await someip.utils.getfirstaddrinfo(
@@ -654,34 +660,34 @@ class AbstractIPv6Option(AbstractIPOption[ipaddress.IPv6Address]):
 
 @SOMEIPSDOption.register
 class IPv4EndpointOption(AbstractIPv4Option, EndpointOption[ipaddress.IPv4Address]):
-    type_: typing.ClassVar[int] = 0x04
+    _type: typing.ClassVar[int] = 0x04
 
 
 @SOMEIPSDOption.register
 class IPv4MulticastOption(AbstractIPv4Option, MulticastOption):
-    type_: typing.ClassVar[int] = 0x14
+    _type: typing.ClassVar[int] = 0x14
 
 
 @SOMEIPSDOption.register
 @dataclasses.dataclass(frozen=True)
 class IPv4SDEndpointOption(AbstractIPv4Option, SDEndpointOption):
-    type_: typing.ClassVar[int] = 0x24
+    _type: typing.ClassVar[int] = 0x24
 
 
 @SOMEIPSDOption.register
 class IPv6EndpointOption(AbstractIPv6Option, EndpointOption[ipaddress.IPv6Address]):
-    type_: typing.ClassVar[int] = 0x06
+    _type: typing.ClassVar[int] = 0x06
 
 
 @SOMEIPSDOption.register
 class IPv6MulticastOption(AbstractIPv6Option, MulticastOption):
-    type_: typing.ClassVar[int] = 0x16
+    _type: typing.ClassVar[int] = 0x16
 
 
 @SOMEIPSDOption.register
 @dataclasses.dataclass(frozen=True)
 class IPv6SDEndpointOption(AbstractIPv6Option, SDEndpointOption):
-    type_: typing.ClassVar[int] = 0x26
+    _type: typing.ClassVar[int] = 0x26
 
 
 @dataclasses.dataclass(frozen=True)
