@@ -23,17 +23,12 @@ class Eventgroup:
     Defines an Eventgroup that can be subscribed to.
 
     :param service_id:
-    :type  service_id: int
     :param instance_id:
-    :type  instance_id: int
     :param major_version:
-    :type  major_version: int
     :param eventgroup_id:
-    :type  eventgroup_id: int
     :param sockname: the socket address as returned by :meth:`socket.getsockname`
     :type  sockname: tuple
     :param protocol: selects the layer 4 protocol
-    :type  protocol: someip.header.L4Protocols
     """
 
     service_id: int
@@ -130,19 +125,12 @@ class Service:
     Defines a Service that can be found and offered.
 
     :param service_id:
-    :type  service_id: int
     :param instance_id: may be 0xFFFF (default) to match any instance
-    :type  instance_id: int
     :param major_version: may be 0xFF (default) to match any major version
-    :type  major_version: int
     :param minor_version: may be 0xFFFFFFFF (default) to match any major version
-    :type  minor_version: int
-    :param options_1: options that apply to this service (run 1).
-    :type  options_1: Tuple[:class:`someip.header.SOMEIPSDOption`, ...]
-    :param options_2: options that apply to this service (run 2).
-    :type  options_2: Tuple[:class:`someip.header.SOMEIPSDOption`, ...]
+    :param options_1: options that apply to this service (run 1)
+    :param options_2: options that apply to this service (run 2)
     :param eventgroups: offered eventgroup ids.
-    :type  eventgroups: FrozenSet[int]
     """
 
     service_id: int
