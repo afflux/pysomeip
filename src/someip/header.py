@@ -17,6 +17,7 @@ import someip.utils
 
 
 T = typing.TypeVar("T", ipaddress.IPv4Address, ipaddress.IPv6Address)
+_T_SOCKNAME = typing.Union[typing.Tuple[str, int], typing.Tuple[str, int, int, int]]
 
 
 SD_SERVICE = 0xFFFF
@@ -59,7 +60,7 @@ class SOMEIPReturnCode(enum.IntEnum):
     E_WRONG_MESSAGE_TYPE = 10
 
 
-def unpack(fmt, buf):
+def _unpack(fmt, buf):
     if len(buf) < fmt.size:
         raise IncompleteReadError(
             f"can not parse {fmt.format!r}, got only {len(buf)} bytes"
@@ -69,6 +70,9 @@ def unpack(fmt, buf):
 
 @dataclasses.dataclass(frozen=True)
 class SOMEIPHeader:
+    """
+    Represents a top-level SOMEIP packet (header and payload).
+    """
     __format: typing.ClassVar[struct.Struct] = struct.Struct("!HHIHHBBBB")
     service_id: int
     method_id: int
@@ -137,11 +141,18 @@ payload: {len(self.payload)} bytes"""
     @classmethod
     def parse(cls, buf: bytes) -> typing.Tuple[SOMEIPHeader, bytes]:
         """
-        parses SOMEIP packet in buffer, returns tuple (S, B)
-        where S is parsed SOMEIPHeader including payload
-        and B is unparsed rest of buffer
+        parses SOMEIP packet in `buf`
+
+        :param buf: buffer containing SOMEIP packet
+        :raises IncompleteReadError: if the buffer did not contain enough data to unpack
+            the SOMEIP packet. Either there was less data than one SOMEIP header length,
+            or the size in the header was too big
+        :raises ParseError: if the packet contained invalid data, such as an unknown
+            message type or return code
+        :return: tuple (S, B) where S is the parsed :class:`SOMEIPHeader` instance and B
+            is the unparsed rest of `buf`
         """
-        parsed, buf_rest = unpack(cls.__format, buf)
+        parsed, buf_rest = _unpack(cls.__format, buf)
         size, builder = cls._parse_header(parsed)
         if len(buf_rest) < size - 8:
             raise IncompleteReadError(
@@ -154,16 +165,31 @@ payload: {len(self.payload)} bytes"""
         return parsed, buf_rest
 
     @classmethod
-    async def read(cls, buf: asyncio.StreamReader) -> SOMEIPHeader:
-        hdr_b = await buf.readexactly(cls.__format.size)
+    async def read(cls, reader: asyncio.StreamReader) -> SOMEIPHeader:
+        """
+        reads a SOMEIP packet from `reader`. Waits until one full SOMEIP packet is
+        available from the stream.
+
+        :param reader: (usually TCP) stream to parse into SOMEIP packets
+        :raises ParseError: if the packet contained invalid data, such as an unknown
+            message type or return code
+        :return: the parsed :class:`SOMEIPHeader` instance
+        """
+        hdr_b = await reader.readexactly(cls.__format.size)
         parsed = cls.__format.unpack(hdr_b)
         size, builder = cls._parse_header(parsed)
 
-        payload_b = await buf.readexactly(size - 8)
+        payload_b = await reader.readexactly(size - 8)
 
         return builder(payload_b)
 
     def build(self) -> bytes:
+        """
+        builds the byte representation of this SOMEIP packet.
+
+        :raises struct.error: if any attribute was out of range for serialization
+        :return: the byte representation
+        """
         size = len(self.payload) + 8
         hdr = self.__format.pack(
             self.service_id,
@@ -180,6 +206,10 @@ payload: {len(self.payload)} bytes"""
 
 
 class SOMEIPReader:
+    """
+    Wrapper class around :class:`asyncio.StreamReader` that returns parsed
+    :class:`SOMEIPHeader` from :meth:`read`
+    """
     def __init__(self, reader: asyncio.StreamReader):
         self.reader = reader
 
@@ -198,10 +228,9 @@ class SOMEIPSDEntryType(enum.IntEnum):
 
 
 def _find(haystack, needle):
-    """Return the index at which the sequence needle appears in the
-    sequence haystack, or -1 if it is not found, using the Boyer-
-    Moore-Horspool algorithm. The elements of needle and haystack must
-    be hashable.
+    """Return the index at which the sequence needle appears in the sequence haystack,
+    or -1 if it is not found, using the Boyer-Moore-Horspool algorithm. The elements of
+    needle and haystack must be hashable.
 
     >>> find([1, 1, 2], [1, 2])
     1
@@ -224,6 +253,22 @@ def _find(haystack, needle):
 
 @dataclasses.dataclass(frozen=True)
 class SOMEIPSDEntry:
+    """
+    Represents an Entry in SOMEIP SD packets.
+
+    :param sd_type:
+    :param service_id:
+    :param instance_id:
+    :param major_version:
+    :param ttl:
+    :param minver_or_counter: service minor version or eventgroup id and counter value
+    :param options_1: resolved options that apply to this entry (run 1)
+    :param options_2: resolved options that apply to this entry (run 2)
+    :param option_index_1: option index (for unresolved options, run 1)
+    :param option_index_2: option index (for unresolved options, run 2)
+    :param num_options_1: number of option (for unresolved options, run 1)
+    :param num_options_2: number of option (for unresolved options, run 2)
+    """
     __format: typing.ClassVar[struct.Struct] = struct.Struct("!BBBBHHBBHI")
     sd_type: SOMEIPSDEntryType
     service_id: int
@@ -232,12 +277,9 @@ class SOMEIPSDEntry:
     ttl: int
     minver_or_counter: int
 
-    options_1: typing.Tuple[SOMEIPSDOption, ...] = dataclasses.field(
-        default_factory=tuple
-    )
-    options_2: typing.Tuple[SOMEIPSDOption, ...] = dataclasses.field(
-        default_factory=tuple
-    )
+    options_1: typing.Tuple[SOMEIPSDOption, ...] = dataclasses.field(default=())
+    options_2: typing.Tuple[SOMEIPSDOption, ...] = dataclasses.field(default=())
+
     option_index_1: typing.Optional[int] = dataclasses.field(default=None)
     option_index_2: typing.Optional[int] = dataclasses.field(default=None)
     num_options_1: typing.Optional[int] = dataclasses.field(default=None)
@@ -276,16 +318,17 @@ class SOMEIPSDEntry:
         )
 
     @cached_property
-    def options(self):
+    def options(self) -> typing.Tuple[SOMEIPSDOption, ...]:
+        """
+        convenience wrapper contains merged :attr:`options_1` and :attr:`options_2`
+        """
         return self.options_1 + self.options_2
 
     @property
-    def is_stop_offer(self):
-        # 4.2.1 TR_SOMEIP_00364
-        return self.sd_type == SOMEIPSDEntryType.OfferService and self.ttl == 0
-
-    @property
-    def options_resolved(self):
+    def options_resolved(self) -> bool:
+        """
+        indicates if the options on this instance are resolved
+        """
         return (
             self.option_index_1 is None
             or self.option_index_2 is None
@@ -296,6 +339,12 @@ class SOMEIPSDEntry:
     def resolve_options(
         self, options: typing.Tuple[SOMEIPSDOption, ...]
     ) -> SOMEIPSDEntry:
+        """
+        resolves this entry's options with option list from containing
+        :class:`SOMEIPSDHeader`.
+
+        :return: a new :class:`SOMEIPSDEntry` instance with resolved options
+        """
         if self.options_resolved:
             raise ValueError("options already resolved")
 
@@ -329,6 +378,14 @@ class SOMEIPSDEntry:
     def assign_option_index(
         self, options: typing.List[SOMEIPSDOption]
     ) -> SOMEIPSDEntry:
+        """
+        assigns option indexes, optionally inserting new options to the given option
+        list. Index assignment is done in a simple manner by searching if a slice exists
+        in `options` that matches the option runs (:attr:`options_1` and
+        :attr:`options_2`).
+
+        :return: a new :class:`SOMEIPSDEntry` instance with assigned options indexes
+        """
         if not self.options_resolved:
             return dataclasses.replace(self)  # pragma: nocover
 
@@ -346,6 +403,11 @@ class SOMEIPSDEntry:
 
     @property
     def service_minor_version(self) -> int:
+        """
+        the service minor version
+
+        :raises TypeError: if this entry is not a FindService or OfferService
+        """
         if self.sd_type not in (
             SOMEIPSDEntryType.FindService,
             SOMEIPSDEntryType.OfferService,
@@ -358,6 +420,11 @@ class SOMEIPSDEntry:
 
     @property
     def eventgroup_counter(self) -> int:
+        """
+        the eventgroup counter
+
+        :raises TypeError: if this entry is not a Subscribe or SubscribeAck
+        """
         if self.sd_type not in (
             SOMEIPSDEntryType.Subscribe,
             SOMEIPSDEntryType.SubscribeAck,
@@ -369,6 +436,11 @@ class SOMEIPSDEntry:
 
     @property
     def eventgroup_id(self) -> int:
+        """
+        the eventgroup id
+
+        :raises TypeError: if this entry is not a Subscribe or SubscribeAck
+        """
         if self.sd_type not in (
             SOMEIPSDEntryType.Subscribe,
             SOMEIPSDEntryType.SubscribeAck,
@@ -380,10 +452,21 @@ class SOMEIPSDEntry:
 
     @classmethod
     def parse(cls, buf: bytes, num_options: int) -> typing.Tuple[SOMEIPSDEntry, bytes]:
+        """
+        parses SOMEIP SD entry in `buf`
+
+        :param buf: buffer containing SOMEIP SD entry
+        :param num_options: number of known options in containing
+            :class:`SOMEIPSDHeader`
+        :raises ParseError: if the buffer did not parse as a SOMEIP SD entry, e.g., due
+            to an unknown entry type or out-of-bounds option indexes
+        :return: tuple (S, B) where S is the parsed :class:`SOMEIPSDEntry` instance and
+            B is the unparsed rest of `buf`
+        """
         (
             (sd_type_b, oi1, oi2, numopt, sid, iid, majv, ttl_hi, ttl_lo, val),
             buf_rest,
-        ) = unpack(cls.__format, buf)
+        ) = _unpack(cls.__format, buf)
         try:
             sd_type = SOMEIPSDEntryType(sd_type_b)
         except ValueError as exc:
@@ -426,6 +509,14 @@ class SOMEIPSDEntry:
         return parsed, buf_rest
 
     def build(self) -> bytes:
+        """
+        build the byte representation of this entry.
+
+        :raises ValueError: if the option indexes on this entry were not resolved.
+            see :meth:`assign_option_index`
+        :raises struct.error: if any attribute was out of range for serialization
+        :return: the byte representation
+        """
         if self.options_resolved:
             raise ValueError("option indexes must be assigned before building")
         oi1 = typing.cast(int, self.option_index_1)
@@ -447,6 +538,9 @@ class SOMEIPSDEntry:
 
 
 class SOMEIPSDOption:
+    """
+    Abstract base class representing SD options
+    """
     __format: typing.ClassVar[struct.Struct] = struct.Struct("!HB")
     _options: typing.ClassVar[
         typing.Dict[int, typing.Type[SOMEIPSDAbstractOption]]
@@ -456,12 +550,28 @@ class SOMEIPSDOption:
     def register(
         cls, option_cls: typing.Type[SOMEIPSDAbstractOption]
     ) -> typing.Type[SOMEIPSDAbstractOption]:
-        cls._options[option_cls._type] = option_cls
+        """
+        Decorator for SD option classes, to register them for option parsing, identified
+        by their :attr:`SOMEIPSDAbstractOption.type` members.
+        """
+        cls._options[option_cls.type] = option_cls
         return option_cls
 
     @classmethod
     def parse(cls, buf: bytes) -> typing.Tuple[SOMEIPSDOption, bytes]:
-        (len_b, type_b), buf_rest = unpack(cls.__format, buf)
+        """
+        parses SOMEIP SD option in `buf`. Options with unknown types will be parsed as
+        :class:`SOMEIPSDUnknownOption`, known types will be parsed to their registered
+        types.
+
+        :param buf: buffer containing SOMEIP SD option
+        :raises ParseError: if the buffer did not parse as a SOMEIP SD option, e.g., due
+            to out-of-bounds lengths or the specific
+            :meth:`SOMEIPSDAbstractOption.parse_option` failed
+        :return: tuple (S, B) where S is the parsed :class:`SOMEIPSDOption` instance and
+            B is the unparsed rest of `buf`
+        """
+        (len_b, type_b), buf_rest = _unpack(cls.__format, buf)
         if len(buf_rest) < len_b:
             raise ParseError(
                 f"option data too short, expected {len_b}, got {buf_rest!r}"
@@ -475,37 +585,77 @@ class SOMEIPSDOption:
         return opt_cls.parse_option(opt_b), buf_rest
 
     def build_option(self, type_b: int, buf: bytes) -> bytes:
+        """
+        Helper for SD option classes to build the byte representation of their option.
+
+        :param type_b: option type identifier
+        :param buf: buffer SD option data
+        :raises struct.error: if the buffer is too big to be represented, or `type_b` is
+            out of range
+        :return: the byte representation
+        """
         return self.__format.pack(len(buf), type_b) + buf
 
     def build(self) -> bytes:
+        """
+        build the byte representation of this option, must be implemented by actual
+        options. Should use :meth:`build_option` to build the option header.
+
+        :raises struct.error: if any attribute was out of range for serialization
+        :return: the byte representation
+        """
         ...
 
 
 @dataclasses.dataclass(frozen=True)
 class SOMEIPSDUnknownOption(SOMEIPSDOption):
+    """
+    Received options with unknown option types are parsed as this generic class.
+
+    :param type: the type identifier for this unknown option
+    :param payload: the option payload
+    """
     type: int
     payload: bytes
 
-    @property
-    def _type(self):
-        return self.type
-
     def build(self) -> bytes:
-        return self.build_option(self._type, self.payload)
+        """
+        build the byte representation of this option.
+
+        :raises struct.error: if :attr:`payload` is too big to be represented, or
+            :attr:`type` is out of range
+        :return: the byte representation
+        """
+        return self.build_option(self.type, self.payload)
 
 
 class SOMEIPSDAbstractOption(SOMEIPSDOption):
-    _type: typing.ClassVar[int]
+    """
+    Base class for specific option implementations.
+    """
+
+    type: typing.ClassVar[int]
+    """
+    Class variable. Used to differentiate SD option types when parsing. See
+    :meth:`SOMEIPSDOption.register` and :meth:`SOMEIPSDOption.parse`
+    """
 
     @classmethod
     def parse_option(cls, buf: bytes) -> SOMEIPSDAbstractOption:
+        """
+        parses SD option payload in `buf`.
+
+        :param buf: buffer containing SOMEIP SD option data
+        :raises ParseError: if this option type fails to parse `buf`
+        :return: the parsed instance
+        """
         ...
 
 
 @SOMEIPSDOption.register
 @dataclasses.dataclass(frozen=True)
 class SOMEIPSDLoadBalancingOption(SOMEIPSDAbstractOption):
-    _type: typing.ClassVar[int] = 2
+    type: typing.ClassVar[int] = 2
     priority: int
     weight: int
 
@@ -520,15 +670,22 @@ class SOMEIPSDLoadBalancingOption(SOMEIPSDAbstractOption):
         return cls(priority=prio, weight=weight)
 
     def build(self) -> bytes:
+        """
+        build the byte representation of this option.
+
+        :raises struct.error: if :attr:`payload` is too big to be represented, or
+            :attr:`type` is out of range
+        :return: the byte representation
+        """
         return self.build_option(
-            self._type, struct.pack("!BHH", 0, self.priority, self.weight)
+            self.type, struct.pack("!BHH", 0, self.priority, self.weight)
         )
 
 
 @SOMEIPSDOption.register
 @dataclasses.dataclass(frozen=True)
 class SOMEIPSDConfigOption(SOMEIPSDAbstractOption):
-    _type: typing.ClassVar[int] = 1
+    type: typing.ClassVar[int] = 1
     configs: typing.Tuple[typing.Tuple[str, typing.Optional[str]], ...]
 
     @classmethod
@@ -562,6 +719,13 @@ class SOMEIPSDConfigOption(SOMEIPSDAbstractOption):
         return cls(configs=tuple(configs))
 
     def build(self) -> bytes:
+        """
+        build the byte representation of this option.
+
+        :raises struct.error: if :attr:`payload` is too big to be represented, or
+            :attr:`type` is out of range
+        :return: the byte representation
+        """
         buf = bytearray([0])
         for k, v in self.configs:
             if v is not None:
@@ -573,16 +737,23 @@ class SOMEIPSDConfigOption(SOMEIPSDAbstractOption):
                 buf.append(len(k))
                 buf += k.encode("ascii")
         buf.append(0)
-        return self.build_option(self._type, buf)
+        return self.build_option(self.type, buf)
 
 
 class L4Protocols(enum.IntEnum):
+    """
+    Enum for valid layer 4 protocol identifiers.
+    """
     TCP = socket.IPPROTO_TCP
     UDP = socket.IPPROTO_UDP
 
 
 @dataclasses.dataclass(frozen=True)
 class AbstractIPOption(SOMEIPSDAbstractOption, typing.Generic[T]):
+    """
+    Abstract base class for options with IP payloads. Generalizes parsing and building
+    based on :attr:`_format`, :attr:`_address_type` and :attr:`_family`.
+    """
     _format: typing.ClassVar[struct.Struct]
     _address_type: typing.ClassVar[typing.Type[T]]
     _family: typing.ClassVar[socket.AddressFamily]
@@ -608,10 +779,25 @@ class AbstractIPOption(SOMEIPSDAbstractOption, typing.Generic[T]):
         return cls(address=addr, l4proto=l4proto, port=port)
 
     def build(self) -> bytes:
-        payload = self._format.pack(0, self.address.packed, 0, self.l4proto, self.port)
-        return self.build_option(self._type, payload)
+        """
+        build the byte representation of this option.
 
-    async def addrinfo(self):
+        :raises struct.error: if :attr:`payload` is too big to be represented, or
+            :attr:`type` is out of range
+        :return: the byte representation
+        """
+        payload = self._format.pack(0, self.address.packed, 0, self.l4proto, self.port)
+        return self.build_option(self.type, payload)
+
+    async def addrinfo(self) -> _T_SOCKNAME:
+        """
+        return address info for this IP option for use in socket-based functions, e.g.,
+        :meth:`socket.connect` or :meth:`socket.sendto`.
+
+        :raises socket.gaierror: if the call to `getaddrinfo` failed or returned no
+            result
+        :returns: the first resolved sockaddr tuple
+        """
         addr = await someip.utils.getfirstaddrinfo(
             str(self.address),
             self.port,
@@ -623,18 +809,30 @@ class AbstractIPOption(SOMEIPSDAbstractOption, typing.Generic[T]):
 
 
 class EndpointOption(AbstractIPOption[T]):
+    """
+    Abstract base class for endpoint options (IPv4 or IPv6).
+    """
     pass
 
 
-class MulticastOption:
+class MulticastOption(AbstractIPOption[T]):
+    """
+    Abstract base class for multicast options (IPv4 or IPv6).
+    """
     pass
 
 
-class SDEndpointOption:
+class SDEndpointOption(AbstractIPOption[T]):
+    """
+    Abstract base class for SD Endpoint options (IPv4 or IPv6).
+    """
     pass
 
 
 class AbstractIPv4Option(AbstractIPOption[ipaddress.IPv4Address]):
+    """
+    Abstract base class for IPv4 options.
+    """
     _format: typing.ClassVar[struct.Struct] = struct.Struct("!B4sBBH")
     _address_type = ipaddress.IPv4Address
     _family = socket.AF_INET
@@ -647,6 +845,9 @@ class AbstractIPv4Option(AbstractIPOption[ipaddress.IPv4Address]):
 
 
 class AbstractIPv6Option(AbstractIPOption[ipaddress.IPv6Address]):
+    """
+    Abstract base class for IPv6 options.
+    """
     _format: typing.ClassVar[struct.Struct] = struct.Struct("!B16sBBH")
     _address_type = ipaddress.IPv6Address
     _family = socket.AF_INET6
@@ -660,51 +861,64 @@ class AbstractIPv6Option(AbstractIPOption[ipaddress.IPv6Address]):
 
 @SOMEIPSDOption.register
 class IPv4EndpointOption(AbstractIPv4Option, EndpointOption[ipaddress.IPv4Address]):
-    _type: typing.ClassVar[int] = 0x04
+    type: typing.ClassVar[int] = 0x04
 
 
 @SOMEIPSDOption.register
 class IPv4MulticastOption(AbstractIPv4Option, MulticastOption):
-    _type: typing.ClassVar[int] = 0x14
+    type: typing.ClassVar[int] = 0x14
 
 
 @SOMEIPSDOption.register
 @dataclasses.dataclass(frozen=True)
 class IPv4SDEndpointOption(AbstractIPv4Option, SDEndpointOption):
-    _type: typing.ClassVar[int] = 0x24
+    type: typing.ClassVar[int] = 0x24
 
 
 @SOMEIPSDOption.register
 class IPv6EndpointOption(AbstractIPv6Option, EndpointOption[ipaddress.IPv6Address]):
-    _type: typing.ClassVar[int] = 0x06
+    type: typing.ClassVar[int] = 0x06
 
 
 @SOMEIPSDOption.register
 class IPv6MulticastOption(AbstractIPv6Option, MulticastOption):
-    _type: typing.ClassVar[int] = 0x16
+    type: typing.ClassVar[int] = 0x16
 
 
 @SOMEIPSDOption.register
 @dataclasses.dataclass(frozen=True)
 class IPv6SDEndpointOption(AbstractIPv6Option, SDEndpointOption):
-    _type: typing.ClassVar[int] = 0x26
+    type: typing.ClassVar[int] = 0x26
 
 
 @dataclasses.dataclass(frozen=True)
 class SOMEIPSDHeader:
+    """
+    Represents a SOMEIP SD packet.
+    """
     entries: typing.Tuple[SOMEIPSDEntry, ...]
-    options: typing.Tuple[SOMEIPSDOption, ...] = dataclasses.field(
-        default_factory=tuple
-    )
+    options: typing.Tuple[SOMEIPSDOption, ...] = dataclasses.field(default=())
     flag_reboot: bool = dataclasses.field(default=False)
     flag_unicast: bool = dataclasses.field(default=True)
     flags_unknown: int = dataclasses.field(default=0)
 
     def resolve_options(self):
+        """
+        resolves all `entries`' options from `options` list.
+
+        :return: a new :class:`SOMEIPSDHeader` instance with entries with resolved
+            options
+        """
         entries = [e.resolve_options(self.options) for e in self.entries]
         return dataclasses.replace(self, entries=tuple(entries))
 
     def assign_option_indexes(self):
+        """
+        assigns option indexes to all `entries` and builds the `options` list.
+
+        :return: a new :class:`SOMEIPSDHeader` instance with entries with assigned
+            options indexes
+        """
         options = list(self.options)
         entries = [e.assign_option_index(options) for e in self.entries]
         return dataclasses.replace(self, entries=tuple(entries), options=tuple(options))
@@ -716,6 +930,16 @@ class SOMEIPSDHeader:
 
     @classmethod
     def parse(cls, buf: bytes) -> typing.Tuple[SOMEIPSDHeader, bytes]:
+        """
+        parses SOMEIP SD packet in `buf`
+
+        :param buf: buffer containing SOMEIP packet
+        :raises ParseError: if the packet contained invalid data, such as out-of-bounds
+            lengths or failing :meth:`SOMEIPSDEntry.parse` and
+            :meth:`SOMEIPSDOption.parse`
+        :return: tuple (S, B) where S is the parsed :class:`SOMEIPSDHeader` instance and
+            B is the unparsed rest of `buf`
+        """
         if len(buf) < 12:
             raise ParseError(f"can not parse SOMEIPSDHeader, got only {len(buf)} bytes")
 
@@ -765,6 +989,13 @@ class SOMEIPSDHeader:
         return parsed, rest_buf
 
     def build(self) -> bytes:
+        """
+        builds the byte representation of this SOMEIP SD packet.
+
+        :raises struct.error: if any attribute was out of range for serialization
+        :raises ValueError: from :meth:`SOMEIPSDEntry.build`
+        :return: the byte representation
+        """
         flags = self.flags_unknown
 
         if self.flag_reboot:

@@ -173,7 +173,6 @@ class TestHeader(unittest.IsolatedAsyncioTestCase):
             minver_or_counter=0x10111213,
         )
         self._check(payload, entry, lambda x: hdr.SOMEIPSDEntry.parse(x, 512))
-        self.assertFalse(entry.is_stop_offer)
         self.assertFalse(entry.options_resolved)
 
     def test_sdentry_bad_type(self):
@@ -196,7 +195,6 @@ class TestHeader(unittest.IsolatedAsyncioTestCase):
             minver_or_counter=0x10111213,
         )
         self._check(payload, entry, lambda x: hdr.SOMEIPSDEntry.parse(x, 512))
-        self.assertTrue(entry.is_stop_offer)
         self.assertFalse(entry.options_resolved)
 
     def test_sdentry_service_minver(self):
@@ -213,7 +211,6 @@ class TestHeader(unittest.IsolatedAsyncioTestCase):
             minver_or_counter=0x10111213,
         )
         self.assertEqual(entry.service_minor_version, 0x10111213)
-        self.assertFalse(entry.is_stop_offer)
         self.assertFalse(entry.options_resolved)
         with self.assertRaises(TypeError):
             entry.eventgroup_counter
@@ -241,7 +238,6 @@ class TestHeader(unittest.IsolatedAsyncioTestCase):
         self._check(
             payload, entry, lambda x: hdr.SOMEIPSDEntry.parse(x, 512), extra=payload
         )
-        self.assertFalse(entry.is_stop_offer)
         self.assertFalse(entry.options_resolved)
 
     def test_sdentry_eventgroup(self):
