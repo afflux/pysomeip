@@ -583,11 +583,16 @@ class TestSDDiscoveryTTLForever(_BaseSDDiscoveryTest):
         self.prot.handle_offer(self.offer_5567, self.fake_addr)
         await settle()
 
-        self.assertEqual(
-            self.mock.method_calls,
+        self.assertCountEqual(
+            self.mock.method_calls[:2],
             [
                 unittest.mock.call.service_stopped(self.cfg_offer_5566, self.fake_addr),
                 unittest.mock.call.service_stopped(self.cfg_offer_5567, self.fake_addr),
+            ],
+        )
+        self.assertEqual(
+            self.mock.method_calls[2:],
+            [
                 unittest.mock.call.service_offered(self.cfg_offer_5566, self.fake_addr),
                 unittest.mock.call.service_offered(self.cfg_offer_5567, self.fake_addr),
             ],
@@ -623,7 +628,7 @@ class TestSDDiscoveryTTLForever(_BaseSDDiscoveryTest):
 
         await settle()
 
-        self.assertEqual(
+        self.assertCountEqual(
             self.mock.method_calls,
             [
                 unittest.mock.call.service_stopped(self.cfg_offer_5566, self.fake_addr),
@@ -653,7 +658,7 @@ class TestSDDiscoveryTTL1(_BaseSDDiscoveryTest):
 
         await settle()
 
-        self.assertEqual(
+        self.assertCountEqual(
             self.mock.method_calls,
             [
                 unittest.mock.call.service_stopped(self.cfg_offer_5566, self.fake_addr),
@@ -672,11 +677,16 @@ class TestSDDiscoveryTTL1(_BaseSDDiscoveryTest):
         self.prot.handle_offer(self.offer_5567, self.fake_addr)
         await settle()
 
-        self.assertEqual(
-            self.mock.method_calls,
+        self.assertCountEqual(
+            self.mock.method_calls[:2],
             [
                 unittest.mock.call.service_stopped(self.cfg_offer_5566, self.fake_addr),
                 unittest.mock.call.service_stopped(self.cfg_offer_5567, self.fake_addr),
+            ],
+        )
+        self.assertEqual(
+            self.mock.method_calls[2:],
+            [
                 unittest.mock.call.service_offered(self.cfg_offer_5566, self.fake_addr),
                 unittest.mock.call.service_offered(self.cfg_offer_5567, self.fake_addr),
             ],
@@ -710,7 +720,7 @@ class TestSDDiscoveryTTL1(_BaseSDDiscoveryTest):
 
         await asyncio.sleep(1.2)
 
-        self.assertEqual(
+        self.assertCountEqual(
             self.mock.method_calls,
             [
                 unittest.mock.call.service_stopped(self.cfg_offer_5566, self.fake_addr),
@@ -748,7 +758,7 @@ class TestSDDiscoveryTTL1(_BaseSDDiscoveryTest):
 
         await asyncio.sleep(1.2)
 
-        self.assertEqual(
+        self.assertCountEqual(
             self.mock.method_calls,
             [
                 unittest.mock.call.service_stopped(self.cfg_offer_5566, self.fake_addr),
