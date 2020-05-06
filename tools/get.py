@@ -26,7 +26,7 @@ class Prot(SOMEIPDatagramProtocol):
     def message_received(
         self,
         someip_message: someip.header.SOMEIPHeader,
-        addr: typing.Tuple[str, int],
+        addr: someip.header._T_SOCKNAME,
         multicast: bool,
     ) -> None:
         LOG.info(
@@ -53,8 +53,7 @@ def auto_int(s):
 
 def setup_log(fmt="", **kwargs):
     try:
-        import coloredlogs
-
+        import coloredlogs  # type: ignore[import]
         coloredlogs.install(fmt="%(asctime)s,%(msecs)03d " + fmt, **kwargs)
     except ModuleNotFoundError:
         logging.basicConfig(format="%(asctime)s " + fmt, **kwargs)
