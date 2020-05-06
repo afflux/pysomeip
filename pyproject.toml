@@ -1,15 +1,15 @@
 [build-system]
 # Minimum requirements for the build system to execute.
-requires = ['setuptools', 'wheel', 'pip']  # PEP 508 specifications.
+requires = ['setuptools', 'wheel', 'pip', 'setuptools_scm[toml]>=3.4']
 build-backend = 'setuptools.build_meta'
+
+[tool.setuptools_scm]
+version_scheme = 'python-simplified-semver'
 
 [tool.coverage.run]
 branch = true
 source = [
     'someip'
-]
-omit = [
-    '*/_version.py',
 ]
 
 [tool.coverage.paths]
@@ -27,5 +27,4 @@ exclude_lines = [
 [tool.black]
 target_version = [
     'py38',
-    'py37',
 ]
