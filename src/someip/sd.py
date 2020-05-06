@@ -373,6 +373,18 @@ class ServiceDiscoveryProtocol(SOMEIPDatagramProtocol):
         # datagram was received on, we need one unicast and one multicast socket
         prot = cls((str(multicast_addr), port))
 
+        # order matters, at least for Windows. If the multicast socket was created
+        # first, both unicast and multicast packets would go to the multicast socket
+        trsp_u = await cls._create_endpoint(
+            loop,
+            prot,
+            family,
+            local_addr,
+            port,
+            multicast_interface=multicast_interface,
+            ttl=ttl,
+        )
+
         trsp_m = await cls._create_endpoint(
             loop,
             prot,
@@ -380,16 +392,6 @@ class ServiceDiscoveryProtocol(SOMEIPDatagramProtocol):
             local_addr,
             port,
             multicast_addr=multicast_addr,
-            multicast_interface=multicast_interface,
-            ttl=ttl,
-        )
-
-        trsp_u = await cls._create_endpoint(
-            loop,
-            prot,
-            family,
-            local_addr,
-            port,
             multicast_interface=multicast_interface,
             ttl=ttl,
         )
