@@ -2,7 +2,6 @@ import asyncio
 import ipaddress
 import logging
 import unittest
-import socket
 from dataclasses import replace
 
 import someip.header as hdr
@@ -320,9 +319,6 @@ class TestHeader(unittest.IsolatedAsyncioTestCase):
             address=ipaddress.IPv4Address("1.2.254.255"), l4proto=0x42, port=1023,
         )
         self._check(payload, option, hdr.SOMEIPSDOption.parse)
-
-        with self.assertRaises(socket.gaierror):
-            await option.addrinfo()
 
         with self.assertRaises(hdr.ParseError):
             hdr.SOMEIPSDOption.parse(

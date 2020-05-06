@@ -5,6 +5,7 @@ import itertools
 import logging
 import socket
 import struct
+import sys
 import unittest
 import unittest.mock
 from dataclasses import replace
@@ -18,6 +19,10 @@ logging.basicConfig(level=logging.DEBUG)
 
 logging.getLogger("asyncio").setLevel(logging.WARNING)
 logging.getLogger("someip").setLevel(logging.WARNING)
+
+def setUpModule():
+    if sys.platform.startswith("win"):
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 # {{{ Utilities: pack_sd and _SendTiming
@@ -84,8 +89,6 @@ async def settle():
     fut = asyncio.Future()
     asyncio.get_event_loop().call_soon(fut.set_result, None)
     await fut
-
-
 # }}}
 
 
@@ -472,7 +475,7 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
     async def test_sd_multicast_bad_af(self):
         with self.assertRaises(ValueError):
             await sd.ServiceDiscoveryProtocol.create_endpoints(
-                family=socket.AF_PACKET,
+                family=socket.AF_IPX,
                 local_addr="127.0.0.1",
                 multicast_addr="224.244.224.245",
                 port=30490,
