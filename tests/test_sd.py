@@ -20,6 +20,7 @@ logging.basicConfig(level=logging.DEBUG)
 logging.getLogger("asyncio").setLevel(logging.WARNING)
 logging.getLogger("someip").setLevel(logging.WARNING)
 
+
 def setUpModule():
     if sys.platform.startswith("win"):
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
