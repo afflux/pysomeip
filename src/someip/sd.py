@@ -20,11 +20,6 @@ import someip.config
 from someip.config import _T_SOCKNAME as _T_SOCKADDR
 from someip.utils import log_exceptions, wait_cancelled
 
-try:
-    from asyncio import ProactorEventLoop  # type: ignore[attr-defined]
-except ImportError:
-    ProactorEventLoop = ()
-
 LOG = logging.getLogger("someip.sd")
 _T_IPADDR = typing.Union[ipaddress.IPv4Address, ipaddress.IPv6Address]
 _T_OPT_SOCKADDR = typing.Optional[_T_SOCKADDR]
@@ -274,7 +269,9 @@ class ServiceDiscoveryProtocol(SOMEIPDatagramProtocol):
                 family=family, type=socket.SOCK_DGRAM, proto=socket.IPPROTO_UDP
             )
 
-            if family == socket.AF_INET6 and isinstance(loop, ProactorEventLoop):
+            if family == socket.AF_INET6 and isinstance(
+                loop, getattr(asyncio, "ProactorEventLoop", ())
+            ):
                 prot.log.warning(
                     "ProactorEventLoop has issues with ipv6 datagram sockets!"
                     " https://bugs.python.org/issue39148. workaround with"
