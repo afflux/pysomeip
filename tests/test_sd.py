@@ -3,6 +3,7 @@ import asyncio
 import ipaddress
 import itertools
 import logging
+import os
 import socket
 import struct
 import sys
@@ -21,7 +22,7 @@ logging.getLogger("asyncio").setLevel(logging.WARNING)
 logging.getLogger("someip").setLevel(logging.WARNING)
 
 
-PRECISION = 0.2  # in seconds
+PRECISION = 0.4 if os.environ.get('CI') == 'true' else 0.2  # in seconds
 
 
 def ticks(n):
