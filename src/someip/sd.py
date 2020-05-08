@@ -476,6 +476,16 @@ class ServiceDiscoveryProtocol(SOMEIPDatagramProtocol):
 
         self.send(hdr.build(), remote)
 
+    def start(self) -> None:
+        self.subscriber.start()
+        self.announcer.start()
+        self.discovery.start()
+
+    def stop(self) -> None:
+        self.discovery.stop()
+        self.announcer.stop()
+        self.subscriber.stop()
+
     def connection_lost(self, exc: typing.Optional[Exception]) -> None:
         log = self.log.exception if exc else self.log.info
         log("connection lost. stopping all child tasks", exc_info=exc)
@@ -833,6 +843,20 @@ class ServiceDiscover:
         self.watcher_all_services: typing.Set[ClientServiceListener] = set()
 
         self.found_services: TimedStore[someip.config.Service] = TimedStore(self.log)
+        self.task: typing.Optional[asyncio.Task[None]] = None
+
+    def start(self):
+        if self.task is not None and not self.task.done():  # pragma: nocover
+            return
+
+        loop = asyncio.get_running_loop()
+        self.task = loop.create_task(self.send_find_services())
+
+    def stop(self):
+        if self.task:  # pragma: nobranch
+            self.task.cancel()
+            asyncio.create_task(wait_cancelled(self.task))
+            self.task = None
 
     def handle_offer(
         self, entry: someip.header.SOMEIPSDEntry, addr: _T_SOCKADDR
@@ -858,6 +882,9 @@ class ServiceDiscover:
         self.watcher_all_services.add(listener)
 
     def find_subscribe_eventgroup(self, eventgroup: someip.config.Eventgroup):
+        # FIXME: ServiceSubscriber will probably introduce a delay of one refresh
+        # interval. workaround would be setting SUBSCRIBE_REFRESH_INTERVAL=0 and
+        # SUBSCRIBE_TTL=TTL_FOREVER
         self.watch_service(
             eventgroup.as_service(),
             AutoSubscribeServiceListener(self.sd.subscriber, eventgroup),
