@@ -2094,7 +2094,11 @@ class TestMulticastEndpointsV4(
             ipaddress.IPv4Address(self.sender_lo_addr).packed,
         )
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
-        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
+        # For Linux, the loopback interface does the loopback already, so
+        # IP_MULTICAST_LOOP is not required. BSD however does not receive own multicast
+        # packets on a loopback interface, therefore IP_MULTICAST_LOOP=1 is required for
+        # BSD.
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
 
 
 class TestMulticastEndpointsV6(
