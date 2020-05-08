@@ -23,11 +23,10 @@ project = 'someip'
 copyright = '2020, Kjell Braden'
 author = 'Kjell Braden'
 
-# The short X.Y version
-version = '1.0'
-# The full version, including alpha/beta/rc tags
-release = '1.0'
-
+from pkg_resources import get_distribution
+release = get_distribution('someip').version
+# for example take major/minor
+version = '.'.join(release.split('.')[:2])
 
 # -- General configuration ---------------------------------------------------
 
