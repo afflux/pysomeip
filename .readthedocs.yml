@@ -1,0 +1,11 @@
+version: 2
+python:
+  version: '3.8'
+  install:
+    # install the package, so docs/conf.py can access the version and
+    # sphinx can find the source
+    - method: pip
+      path: .[docs]
+sphinx:
+  builder: html
+  configuration: docs/conf.py
