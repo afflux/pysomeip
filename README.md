@@ -11,3 +11,16 @@ A simple implementation of [SOME/IP](http://some-ip.com/), in Python 3.8+ with [
 Wire format building and parsing in `someip.header`, Service Discovery and socket logic in `someip.sd`. Refer to `tools/` for example CLI tools which should give a rough idea on how to use the API.
 
 [API docs](https://pysomeip.readthedocs.io)
+
+Missing Features
+================
+(Pull requests welcome!)
+
+* SD options that are not referenced by entries are discarded.
+* SubscribeAck and SubscribeNack is ignored
+  * not signaled to applications
+  * no way to handle MulticastEndpoint options for multicast event notifications
+* subscription to TCP services is not supported
+* subscription counter assignment
+* SD messages to same hosts are not packed together
+* probably other things
