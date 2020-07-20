@@ -269,13 +269,15 @@ class ServiceDiscoveryProtocol(SOMEIPDatagramProtocol):
                 family=family, type=socket.SOCK_DGRAM, proto=socket.IPPROTO_UDP
             )
 
-            if family == socket.AF_INET6 and isinstance(
-                loop, getattr(asyncio, "ProactorEventLoop", ())
+            if (
+                family == socket.AF_INET6
+                and platform.python_version_tuple() < (3, 8, 4)
+                and isinstance(loop, getattr(asyncio, "ProactorEventLoop", ()))
             ):
                 prot.log.warning(
                     "ProactorEventLoop has issues with ipv6 datagram sockets!"
-                    " https://bugs.python.org/issue39148. workaround with"
-                    " asyncio.set_event_loop_policy("
+                    " https://bugs.python.org/issue39148. Update to Python>=3.8.4, or"
+                    " workaround with asyncio.set_event_loop_policy("
                     "asyncio.WindowsSelectorEventLoopPolicy())",
                 )
 
