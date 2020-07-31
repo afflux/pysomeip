@@ -1068,6 +1068,25 @@ class ServiceAnnouncer:
             self.log.warning("adding services without going through startup phase")
         self.announcing_services.append((service, listener))
 
+    def stop_announce_service(
+        self, service: someip.config.Service, listener: ServerServiceListener,
+        send_stop=True,
+    ) -> None:
+        """
+        stops announcing previously started service
+
+        :param service: service definition of service to be stopped
+        :param listener: listener of service to be stopped
+        :raises ValueError: if the service was not announcing
+        """
+        self.announcing_services.remove((service, listener))
+        if send_stop and self.task is not None and not self.task.done():
+            asyncio.get_event_loop().call_soon(
+                functools.partial(
+                    self._send_offers, ((service, listener),), stop=True
+                ),
+            )
+
     @log_exceptions()
     async def handle_subscribe(
         self, entry: someip.header.SOMEIPSDEntry, addr: _T_SOCKADDR,

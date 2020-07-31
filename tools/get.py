@@ -3,7 +3,6 @@ import argparse
 import asyncio
 import ipaddress
 import logging
-import typing
 
 import someip.header
 from someip.sd import SOMEIPDatagramProtocol
