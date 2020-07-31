@@ -135,7 +135,7 @@ class SOMEIPDatagramProtocol:
         if not remote:
             remote = self.default_addr
         # workaround for https://github.com/python/typeshed/pull/3943
-        self.transport.sendto(buf, remote)  # type: ignore[arg-type]
+        self.transport.sendto(buf, remote)
 
 
 class DatagramProtocolAdapter(asyncio.DatagramProtocol):
