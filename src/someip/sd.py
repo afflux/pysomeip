@@ -271,7 +271,7 @@ class ServiceDiscoveryProtocol(SOMEIPDatagramProtocol):
 
             if (
                 family == socket.AF_INET6
-                and platform.python_version_tuple() < (3, 8, 4)
+                and platform.python_version_tuple() < ('3', '8', '4')
                 and isinstance(loop, getattr(asyncio, "ProactorEventLoop", ()))
             ):
                 prot.log.warning(
