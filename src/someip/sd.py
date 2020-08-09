@@ -327,8 +327,6 @@ class ServiceDiscoveryProtocol(SOMEIPDatagramProtocol):
                     socket.IPPROTO_IP, socket.IP_MULTICAST_IF, packed_local_addr
                 )
                 sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl)
-                # we want other implementations on the same host to receive our messages
-                sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
 
             else:  # AF_INET6
                 if multicast_interface is None:
@@ -344,8 +342,6 @@ class ServiceDiscoveryProtocol(SOMEIPDatagramProtocol):
                     struct.pack("=i", ifindex),
                 )
                 sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS, ttl)
-                # we want other implementations on the same host to receive our messages
-                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_LOOP, 1)
         except BaseException:
             trsp.close()
             raise
