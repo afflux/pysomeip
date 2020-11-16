@@ -32,7 +32,7 @@ async def run(local_addr, multicast_addr, port, services):
         for sid in services:
             protocol.discovery.watch_service(someip.config.Service(sid), monitor)
 
-        await protocol.send_find_services()
+        protocol.discovery.start()
     else:
         protocol.discovery.watch_all_services(monitor)
 
@@ -42,6 +42,7 @@ async def run(local_addr, multicast_addr, port, services):
     except asyncio.CancelledError:
         pass
     finally:
+        protocol.discovery.stop()
         trsp_u.close()
         trsp_m.close()
 
