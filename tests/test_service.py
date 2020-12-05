@@ -428,7 +428,7 @@ class TestService(unittest.IsolatedAsyncioTestCase):
         self.mock.reset_mock()
 
         # cyclic notification
-        await asyncio.sleep(ticks(1))
+        await asyncio.sleep(ticks(1.1))
         self.mock.sendto.assert_called_once_with(
             replace(
                 notification,
@@ -451,7 +451,7 @@ class TestService(unittest.IsolatedAsyncioTestCase):
         self.prot.message_received(inc, self.fake_addr, False)
 
         # cyclic notification
-        await asyncio.sleep(ticks(1))
+        await asyncio.sleep(ticks(1.1))
         self.mock.sendto.assert_called_once_with(
             replace(
                 notification,
@@ -506,7 +506,7 @@ class TestService(unittest.IsolatedAsyncioTestCase):
         self.mock.reset_mock()
 
         # cyclic notification
-        await asyncio.sleep(ticks(1))
+        await asyncio.sleep(ticks(1.1))
         self.assertCountEqual(
             self.mock.sendto.call_args_list,
             (
@@ -533,7 +533,7 @@ class TestService(unittest.IsolatedAsyncioTestCase):
         self.prot.client_unsubscribed(sub2, fake_addr2)
 
         # one client removed -> one remaining cyclic notification
-        await asyncio.sleep(ticks(1))
+        await asyncio.sleep(ticks(1.1))
         self.assertCountEqual(
             self.mock.sendto.call_args_list,
             (
@@ -552,7 +552,7 @@ class TestService(unittest.IsolatedAsyncioTestCase):
         self.prot.client_unsubscribed(sub1, self.fake_addr)
 
         # cyclic notification
-        await asyncio.sleep(ticks(1))
+        await asyncio.sleep(ticks(1.1))
 
         self.mock.sendto.assert_not_called()
 
@@ -620,7 +620,7 @@ class TestService(unittest.IsolatedAsyncioTestCase):
         evgrp.value = b"\1\2\3\4"
         evgrp.notify_once()
 
-        await asyncio.sleep(ticks(1))
+        await asyncio.sleep(ticks(1.1))
 
         self.prot.send.assert_not_called()
 
@@ -642,6 +642,6 @@ class TestService(unittest.IsolatedAsyncioTestCase):
         evgrp.value = b"\4\3\2\1"
         evgrp.notify_once()
 
-        await asyncio.sleep(ticks(1))
+        await asyncio.sleep(ticks(1.1))
 
         self.prot.send.assert_called_once()

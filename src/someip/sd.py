@@ -80,7 +80,7 @@ class SOMEIPDatagramProtocol:
 
     def __init__(self, logger: str = "someip"):
         self.log = logging.getLogger(logger)
-        self.transport: typing.Optional[asyncio.DatagramTransport] = None
+        self.transport: asyncio.DatagramTransport
         self.session_storage = _SessionStorage()
 
         # default_addr=None means use connected address from socket
@@ -127,7 +127,7 @@ class SOMEIPDatagramProtocol:
         # default_addr. However, after connect() the socket will not be bound to
         # INADDR_ANY anymore. so we store the multicast address as a default destination
         # address on the instance and wrap the send calls with self.send
-        if self.transport is None:  # pragma: nocover
+        if not self.transport:  # pragma: nocover
             self.log.error(
                 "no transport set on %r but tried to send to %r: %r", self, remote, buf
             )

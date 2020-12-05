@@ -9,14 +9,12 @@ from __future__ import annotations
 import asyncio
 import collections
 import dataclasses
-import logging
 import functools
 import warnings
 import typing
 
 from someip import header, config, sd, utils
 
-LOG = logging.getLogger("someip.service")
 
 _T_METHOD_HANDLER = typing.Callable[
     [header.SOMEIPHeader, header._T_SOCKNAME], typing.Optional[bytes]

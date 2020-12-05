@@ -9,12 +9,11 @@ import socket
 from someip.header import (
     _T_SOCKNAME,
     SOMEIPHeader,
-    SOMEIPReturnCode,
 )
 from someip.sd import ServiceDiscoveryProtocol
-from someip.service import SimpleEventgroup, SimpleService
+from someip.service import SimpleEventgroup, SimpleService, MalformedMessageError
 
-LOG = logging.getLogger("fakeservice")
+LOG = logging.getLogger("simpleservice")
 
 
 class TimeEvgrp(SimpleEventgroup):
@@ -55,10 +54,7 @@ class Prot(SimpleService):
     ) -> typing.Optional[bytes]:
         # only handle empty get requests
         if someip_message.payload:
-            self.send_error_response(
-                someip_message, addr, SOMEIPReturnCode.E_MALFORMED_MESSAGE
-            )
-            return None
+            raise MalformedMessageError
 
         return self.get_time()
 
@@ -68,11 +64,8 @@ class Prot(SimpleService):
         try:
             self.set_time(someip_message.payload)
             return b""
-        except ValueError:
-            self.send_error_response(
-                someip_message, addr, SOMEIPReturnCode.E_MALFORMED_MESSAGE
-            )
-            return None
+        except ValueError as exc:
+            raise MalformedMessageError from exc
 
 
 async def run(local_addr, multicast_addr, port):
