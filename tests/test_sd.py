@@ -7,6 +7,7 @@ import os
 import socket
 import struct
 import sys
+import typing
 import unittest
 import unittest.mock
 from dataclasses import replace
@@ -22,7 +23,7 @@ logging.getLogger("asyncio").setLevel(logging.WARNING)
 logging.getLogger("someip").setLevel(logging.WARNING)
 
 
-PRECISION = 0.4 if os.environ.get('CI') == 'true' else 0.2  # in seconds
+PRECISION = 0.4 if os.environ.get("CI") == "true" else 0.2  # in seconds
 
 
 def ticks(n):
@@ -37,7 +38,9 @@ def setUpModule():
 # {{{ Utilities: pack_sd and _SendTiming
 def pack_sd(entries, reboot=True, unicast=True, session_id=1):
     msg = hdr.SOMEIPSDHeader(
-        flag_reboot=reboot, flag_unicast=unicast, entries=tuple(entries),
+        flag_reboot=reboot,
+        flag_unicast=unicast,
+        entries=tuple(entries),
     ).assign_option_indexes()
 
     data = hdr.SOMEIPHeader(
@@ -55,7 +58,7 @@ def pack_sd(entries, reboot=True, unicast=True, session_id=1):
 
 class _SendTiming(unittest.TestCase):
     def setup_timing(self, *mocks):
-        self.send_times = {}
+        self.send_times: typing.Dict[unittest.mock.Mock, typing.List[float]] = {}
 
         for mock in mocks:
             self.send_times[mock] = []
@@ -99,7 +102,7 @@ class _SendTiming(unittest.TestCase):
 
 
 async def settle():
-    fut = asyncio.Future()
+    fut: asyncio.Future[None] = asyncio.Future()
     asyncio.get_event_loop().call_soon(fut.set_result, None)
     await fut
 
@@ -178,7 +181,9 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
 
         # session_id wraps to 1 instead of 0
         r = itertools.chain(
-            range(1, 0x10000), range(0x100001, 0x20000), range(0x200001, 0x20020),
+            range(1, 0x10000),
+            range(0x100001, 0x20000),
+            range(0x200001, 0x20020),
         )
 
         for i in r:
@@ -356,7 +361,9 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
 
         with self.assertLogs("someip", "ERROR"):
             prot.datagram_received(
-                replace(msg, method_id=0x1234).build(), self.fake_addr, multicast=False,
+                replace(msg, method_id=0x1234).build(),
+                self.fake_addr,
+                multicast=False,
             )
 
         prot.sd_message_received.assert_not_called()
@@ -1052,7 +1059,9 @@ class TestSubscribeEventgroup(unittest.IsolatedAsyncioTestCase):
     local_addr = ("2001:db8::ff", 30331, 0, 0)
     remote1_addr = ("2001:db8::1", 30332, 0, 0)
     remote2_addr = ("2001:db8::2", 30337, 0, 0)
-    maxDiff = None
+    maxDiff: typing.Optional[int] = None
+    TTL = typing.ClassVar[int]
+    REFRESH_INTERVAL = typing.ClassVar[float]
 
     async def asyncSetUp(self):  # noqa: N802
         mock_sd = unittest.mock.Mock(spec_set=["timings", "log", "send_sd"])
@@ -1127,7 +1136,8 @@ class TestSubscribeEventgroupTTL3(TestSubscribeEventgroup):
             self._mock_send_sd.call_args_list,
             (
                 unittest.mock.call(
-                    [self.sub_evgrp_1, self.sub_evgrp_3], remote=self.remote1_addr,
+                    [self.sub_evgrp_1, self.sub_evgrp_3],
+                    remote=self.remote1_addr,
                 ),
                 unittest.mock.call([self.sub_evgrp_2], remote=self.remote2_addr),
             ),
@@ -1140,7 +1150,8 @@ class TestSubscribeEventgroupTTL3(TestSubscribeEventgroup):
         await settle()
 
         self._mock_send_sd.assert_called_once_with(
-            [self.stop_sub_evgrp_1], remote=self.remote1_addr,
+            [self.stop_sub_evgrp_1],
+            remote=self.remote1_addr,
         )
         self._mock_send_sd.reset_mock()
 
@@ -1176,7 +1187,8 @@ class TestSubscribeEventgroupTTL3(TestSubscribeEventgroup):
         await asyncio.sleep(1)
 
         self._mock_send_sd.assert_called_once_with(
-            [self.sub_evgrp_2], remote=self.remote2_addr,
+            [self.sub_evgrp_2],
+            remote=self.remote2_addr,
         )
         self._mock_send_sd.reset_mock()
 
@@ -1205,7 +1217,8 @@ class TestSubscribeEventgroupTTLForever(TestSubscribeEventgroup):
 
         await settle()
         self._mock_send_sd.assert_called_once_with(
-            [self.sub_evgrp_3], remote=self.remote1_addr,
+            [self.sub_evgrp_3],
+            remote=self.remote1_addr,
         )
 
     async def test_sd_stop_send_stop(self):
@@ -1214,7 +1227,8 @@ class TestSubscribeEventgroupTTLForever(TestSubscribeEventgroup):
         await settle()
 
         self._mock_send_sd.assert_called_once_with(
-            [self.sub_evgrp_1], remote=self.remote1_addr,
+            [self.sub_evgrp_1],
+            remote=self.remote1_addr,
         )
         self._mock_send_sd.reset_mock()
 
@@ -1223,7 +1237,8 @@ class TestSubscribeEventgroupTTLForever(TestSubscribeEventgroup):
         await settle()
 
         self._mock_send_sd.assert_called_once_with(
-            [self.stop_sub_evgrp_1], remote=self.remote1_addr,
+            [self.stop_sub_evgrp_1],
+            remote=self.remote1_addr,
         )
 
     async def test_sd_stop_no_send_stop(self):
@@ -1232,7 +1247,8 @@ class TestSubscribeEventgroupTTLForever(TestSubscribeEventgroup):
         await settle()
 
         self._mock_send_sd.assert_called_once_with(
-            [self.sub_evgrp_1], remote=self.remote1_addr,
+            [self.sub_evgrp_1],
+            remote=self.remote1_addr,
         )
         self._mock_send_sd.reset_mock()
 
@@ -1300,7 +1316,9 @@ class TestSDAnnounce(unittest.IsolatedAsyncioTestCase, _SendTiming):
             options_1=(self.ep_2,),
         )
 
-        self.cfg_service_9999 = cfg.Service(service_id=0x9999,)
+        self.cfg_service_9999 = cfg.Service(
+            service_id=0x9999,
+        )
 
         self.listener_5566 = unittest.mock.Mock()
         self.listener_2233 = unittest.mock.Mock()
@@ -1928,7 +1946,7 @@ class TestSDSubscriptionTTL1(_BaseSDSubscriptionTest):
 
 # {{{ ServiceDiscoveryProtocol multicast endpoints
 class _MulticastEndpointsTest:
-    maxDiff = None
+    maxDiff: typing.Optional[int] = None
     AF: socket.AddressFamily
     bind_lo_addr: str
     bind_mc_addr: str

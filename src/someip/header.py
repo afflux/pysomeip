@@ -73,6 +73,7 @@ class SOMEIPHeader:
     """
     Represents a top-level SOMEIP packet (header and payload).
     """
+
     __format: typing.ClassVar[struct.Struct] = struct.Struct("!HHIHHBBBB")
     service_id: int
     method_id: int
@@ -210,6 +211,7 @@ class SOMEIPReader:
     Wrapper class around :class:`asyncio.StreamReader` that returns parsed
     :class:`SOMEIPHeader` from :meth:`read`
     """
+
     def __init__(self, reader: asyncio.StreamReader):
         self.reader = reader
 
@@ -269,6 +271,7 @@ class SOMEIPSDEntry:
     :param num_options_1: number of option (for unresolved options, run 1)
     :param num_options_2: number of option (for unresolved options, run 2)
     """
+
     __format: typing.ClassVar[struct.Struct] = struct.Struct("!BBBBHHBBHI")
     sd_type: SOMEIPSDEntryType
     service_id: int
@@ -541,6 +544,7 @@ class SOMEIPSDOption:
     """
     Abstract base class representing SD options
     """
+
     __format: typing.ClassVar[struct.Struct] = struct.Struct("!HB")
     _options: typing.ClassVar[
         typing.Dict[int, typing.Type[SOMEIPSDAbstractOption]]
@@ -615,6 +619,7 @@ class SOMEIPSDUnknownOption(SOMEIPSDOption):
     :param type: the type identifier for this unknown option
     :param payload: the option payload
     """
+
     type: int
     payload: bytes
 
@@ -744,6 +749,7 @@ class L4Protocols(enum.IntEnum):
     """
     Enum for valid layer 4 protocol identifiers.
     """
+
     TCP = socket.IPPROTO_TCP
     UDP = socket.IPPROTO_UDP
 
@@ -754,6 +760,7 @@ class AbstractIPOption(SOMEIPSDAbstractOption, typing.Generic[T]):
     Abstract base class for options with IP payloads. Generalizes parsing and building
     based on :attr:`_format`, :attr:`_address_type` and :attr:`_family`.
     """
+
     _format: typing.ClassVar[struct.Struct]
     _address_type: typing.ClassVar[typing.Type[T]]
     _family: typing.ClassVar[socket.AddressFamily]
@@ -812,6 +819,7 @@ class EndpointOption(AbstractIPOption[T]):
     """
     Abstract base class for endpoint options (IPv4 or IPv6).
     """
+
     pass
 
 
@@ -819,6 +827,7 @@ class MulticastOption(AbstractIPOption[T]):
     """
     Abstract base class for multicast options (IPv4 or IPv6).
     """
+
     pass
 
 
@@ -826,6 +835,7 @@ class SDEndpointOption(AbstractIPOption[T]):
     """
     Abstract base class for SD Endpoint options (IPv4 or IPv6).
     """
+
     pass
 
 
@@ -833,6 +843,7 @@ class AbstractIPv4Option(AbstractIPOption[ipaddress.IPv4Address]):
     """
     Abstract base class for IPv4 options.
     """
+
     _format: typing.ClassVar[struct.Struct] = struct.Struct("!B4sBBH")
     _address_type = ipaddress.IPv4Address
     _family = socket.AF_INET
@@ -848,6 +859,7 @@ class AbstractIPv6Option(AbstractIPOption[ipaddress.IPv6Address]):
     """
     Abstract base class for IPv6 options.
     """
+
     _format: typing.ClassVar[struct.Struct] = struct.Struct("!B16sBBH")
     _address_type = ipaddress.IPv6Address
     _family = socket.AF_INET6
@@ -896,6 +908,7 @@ class SOMEIPSDHeader:
     """
     Represents a SOMEIP SD packet.
     """
+
     entries: typing.Tuple[SOMEIPSDEntry, ...]
     options: typing.Tuple[SOMEIPSDOption, ...] = dataclasses.field(default=())
     flag_reboot: bool = dataclasses.field(default=False)

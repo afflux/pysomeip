@@ -134,7 +134,6 @@ class SOMEIPDatagramProtocol:
             return
         if not remote:
             remote = self.default_addr
-        # workaround for https://github.com/python/typeshed/pull/3943
         self.transport.sendto(buf, remote)
 
 
@@ -271,7 +270,7 @@ class ServiceDiscoveryProtocol(SOMEIPDatagramProtocol):
 
             if (
                 family == socket.AF_INET6
-                and platform.python_version_tuple() < ('3', '8', '4')
+                and platform.python_version_tuple() < ("3", "8", "4")
                 and isinstance(loop, getattr(asyncio, "ProactorEventLoop", ()))
             ):
                 prot.log.warning(
@@ -836,7 +835,8 @@ class ServiceDiscover:
         self.log = sd.log.getChild("discover")
 
         self.watched_services: typing.Dict[
-            someip.config.Service, typing.Set[ClientServiceListener],
+            someip.config.Service,
+            typing.Set[ClientServiceListener],
         ] = collections.defaultdict(set)
         self.watcher_all_services: typing.Set[ClientServiceListener] = set()
 
@@ -1065,7 +1065,9 @@ class ServiceAnnouncer:
         self.announcing_services.append((service, listener))
 
     def stop_announce_service(
-        self, service: someip.config.Service, listener: ServerServiceListener,
+        self,
+        service: someip.config.Service,
+        listener: ServerServiceListener,
         send_stop=True,
     ) -> None:
         """
@@ -1078,14 +1080,14 @@ class ServiceAnnouncer:
         self.announcing_services.remove((service, listener))
         if send_stop and self.task is not None and not self.task.done():
             asyncio.get_event_loop().call_soon(
-                functools.partial(
-                    self._send_offers, ((service, listener),), stop=True
-                ),
+                functools.partial(self._send_offers, ((service, listener),), stop=True),
             )
 
     @log_exceptions()
     async def handle_subscribe(
-        self, entry: someip.header.SOMEIPSDEntry, addr: _T_SOCKADDR,
+        self,
+        entry: someip.header.SOMEIPSDEntry,
+        addr: _T_SOCKADDR,
     ) -> None:
         subscription = EventgroupSubscription.from_subscribe_entry(entry)
         if entry.ttl == 0:

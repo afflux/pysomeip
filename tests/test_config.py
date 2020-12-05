@@ -16,7 +16,10 @@ class TestConfig(unittest.TestCase):
         host = ipaddress.ip_address("203.0.113.78")
         port = 4321
         results = socket.getaddrinfo(
-            str(host), port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP,
+            str(host),
+            port,
+            type=socket.SOCK_STREAM,
+            proto=socket.IPPROTO_TCP,
         )
         if not results:
             raise RuntimeError("could not get addr info")
@@ -51,7 +54,10 @@ class TestConfig(unittest.TestCase):
         host = ipaddress.ip_address("2001:db8::1234:5678:dead:beef")
         port = 4321
         results = socket.getaddrinfo(
-            str(host), port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP,
+            str(host),
+            port,
+            type=socket.SOCK_STREAM,
+            proto=socket.IPPROTO_TCP,
         )
         if not results:
             raise RuntimeError("could not get addr info")

@@ -316,7 +316,9 @@ class TestHeader(unittest.IsolatedAsyncioTestCase):
 
         payload = b"\x00\x09\x04\x00\x01\x02\xfe\xff\x00\x42\x03\xff"
         option = hdr.IPv4EndpointOption(
-            address=ipaddress.IPv4Address("1.2.254.255"), l4proto=0x42, port=1023,
+            address=ipaddress.IPv4Address("1.2.254.255"),
+            l4proto=0x42,
+            port=1023,
         )
         self._check(payload, option, hdr.SOMEIPSDOption.parse)
 

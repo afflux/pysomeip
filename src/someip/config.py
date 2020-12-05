@@ -76,7 +76,9 @@ class Eventgroup:
         if not self.as_service().matches_offer(service.create_offer_entry()):
             return None
         return dataclasses.replace(
-            self, instance_id=service.instance_id, major_version=service.major_version,
+            self,
+            instance_id=service.instance_id,
+            major_version=service.major_version,
         )
 
     def as_service(self):

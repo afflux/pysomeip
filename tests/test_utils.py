@@ -102,7 +102,9 @@ class TestGAI(unittest.IsolatedAsyncioTestCase):
 
     async def test_lo4_sock(self):
         sock = socket.socket(
-            family=socket.AF_INET, type=socket.SOCK_DGRAM, proto=socket.IPPROTO_UDP,
+            family=socket.AF_INET,
+            type=socket.SOCK_DGRAM,
+            proto=socket.IPPROTO_UDP,
         )
         try:
             result = await asyncio.wait_for(
@@ -123,7 +125,9 @@ class TestGAI(unittest.IsolatedAsyncioTestCase):
 
     async def test_lo6_sock(self):
         sock = socket.socket(
-            family=socket.AF_INET6, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP,
+            family=socket.AF_INET6,
+            type=socket.SOCK_STREAM,
+            proto=socket.IPPROTO_TCP,
         )
         try:
             result = await asyncio.wait_for(
@@ -157,7 +161,9 @@ class TestGAI(unittest.IsolatedAsyncioTestCase):
 
     async def test_flags_and_socket(self):
         sock = socket.socket(
-            family=socket.AF_INET6, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP,
+            family=socket.AF_INET6,
+            type=socket.SOCK_STREAM,
+            proto=socket.IPPROTO_TCP,
         )
         try:
             with self.assertRaises(ValueError):
