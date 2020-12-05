@@ -28,6 +28,13 @@ someip.sd module
     :undoc-members:
     :show-inheritance:
 
+someip.service module
+---------------------
+
+.. automodule:: someip.service
+    :members:
+    :undoc-members:
+
 someip.utils module
 -------------------
 
