@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 import ipaddress
@@ -33,14 +35,16 @@ async def settle():
 
 
 class ExampleEvgrp(service.SimpleEventgroup):
-    def __init__(self, service: service.SimpleService):
+    def __init__(self, service: ExampleService):
         super().__init__(service, id=1, interval=ticks(1))
+
+        self.service: ExampleService
 
         self.update_task = asyncio.create_task(self.update())
 
     async def update(self):
         while True:
-            self.value = self.service.counter.to_bytes(2, "big")
+            self.values[1] = self.service.counter.to_bytes(2, "big")
             await asyncio.sleep(ticks(0.9))
 
 
@@ -60,7 +64,7 @@ class ExampleService(service.SimpleService):
         self.register_eventgroup(self.eventgroup)
 
     def method_get_counter(
-        self, someip_message: hdr.SOMEIPHeader, addr: typing.Tuple[str, int]
+        self, someip_message: hdr.SOMEIPHeader, addr: hdr._T_SOCKNAME
     ) -> typing.Optional[bytes]:
         # only handle empty get requests
         if someip_message.payload:
@@ -69,7 +73,7 @@ class ExampleService(service.SimpleService):
         return self.counter.to_bytes(2, "big")
 
     def method_increment_counter(
-        self, someip_message: hdr.SOMEIPHeader, addr: typing.Tuple[str, int]
+        self, someip_message: hdr.SOMEIPHeader, addr: hdr._T_SOCKNAME
     ) -> typing.Optional[bytes]:
         # only handle empty get requests
         if someip_message.payload:
@@ -80,7 +84,7 @@ class ExampleService(service.SimpleService):
         return b""
 
     def method_set_counter(
-        self, someip_message: hdr.SOMEIPHeader, addr: typing.Tuple[str, int]
+        self, someip_message: hdr.SOMEIPHeader, addr: hdr._T_SOCKNAME
     ) -> typing.Optional[bytes]:
         if len(someip_message.payload) != 2:
             raise service.MalformedMessageError
@@ -89,7 +93,7 @@ class ExampleService(service.SimpleService):
         return b""
 
     def method_reset_counter(
-        self, someip_message: hdr.SOMEIPHeader, addr: typing.Tuple[str, int]
+        self, someip_message: hdr.SOMEIPHeader, addr: hdr._T_SOCKNAME
     ) -> typing.Optional[bytes]:
         # only handle empty get requests
         if someip_message.payload:
@@ -617,8 +621,8 @@ class TestService(unittest.IsolatedAsyncioTestCase):
         self.prot.send = unittest.mock.Mock()
 
         # no clients -> no notification triggered
-        evgrp.value = b"\1\2\3\4"
-        evgrp.notify_once()
+        evgrp.values[1] = b"\1\2\3\4"
+        evgrp.notify_once((1,))
 
         await asyncio.sleep(ticks(1.1))
 
@@ -639,9 +643,17 @@ class TestService(unittest.IsolatedAsyncioTestCase):
         self.prot.send.reset_mock()
 
         # clients subscribed -> notification triggered
-        evgrp.value = b"\4\3\2\1"
-        evgrp.notify_once()
+        evgrp.values[1] = b"\4\3\2\1"
+        evgrp.notify_once((1,))
 
         await asyncio.sleep(ticks(1.1))
 
         self.prot.send.assert_called_once()
+        self.prot.send.reset_mock()
+
+        # no event given -> don't send out notification
+        evgrp.notify_once(())
+
+        await asyncio.sleep(ticks(1.1))
+
+        self.prot.send.assert_not_called()

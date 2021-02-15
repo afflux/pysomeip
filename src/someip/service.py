@@ -30,10 +30,10 @@ class MalformedMessageError(Exception):
 
 class SimpleEventgroup:
     """
-    set :attr:`value` to the current value, call :meth:`notify_once` to immediately
+    set :attr:`values` to the current value, call :meth:`notify_once` to immediately
     notify subscribers about new value.
 
-    New subscribers will be notified about the current :attr:`value`.
+    New subscribers will be notified about the current :attr:`values`.
     """
 
     def __init__(
@@ -55,46 +55,61 @@ class SimpleEventgroup:
 
         self.has_clients = asyncio.Event()
 
-        self.value: bytes
+        self.values: typing.Dict[int, bytes] = {}
         """
-        the current value to send out as notification payload.
+        the current value for each event to send out as notification payload.
         """
 
     @utils.log_exceptions()
-    async def _notify_single(self, endpoint: header.EndpointOption[typing.Any]) -> None:
+    async def _notify_single(
+        self, endpoint: header.EndpointOption[typing.Any], events: typing.Iterable[int]
+    ) -> None:
         addr = await endpoint.addrinfo()
-        payload = self.value
-        self.log.info("notifying to %r: %r", addr, payload)
-        _, session_id = self.service.session_storage.assign_outgoing(addr)
-        hdr = header.SOMEIPHeader(
-            service_id=self.service.service_id,
-            method_id=0x8000 | self.id,
-            client_id=0,
-            session_id=session_id,
-            message_type=header.SOMEIPMessageType.NOTIFICATION,
-            interface_version=self.service.version_major,
-            payload=payload,
-        )
-        self.service.send(hdr.build(), addr)
+
+        msgbuf = bytearray()
+        for event_id in events:
+            payload = self.values[event_id]
+
+            self.log.info("notifying 0x%04x to %r: %r", event_id, addr, payload)
+
+            _, session_id = self.service.session_storage.assign_outgoing(addr)
+            hdr = header.SOMEIPHeader(
+                service_id=self.service.service_id,
+                method_id=0x8000 | event_id,
+                client_id=0,
+                session_id=session_id,
+                message_type=header.SOMEIPMessageType.NOTIFICATION,
+                interface_version=self.service.version_major,
+                payload=payload,
+            )
+
+            msgbuf += hdr.build()
+
+        if msgbuf:
+            self.service.send(msgbuf, addr)
 
     @utils.log_exceptions()
-    async def _notify_all(self):
+    async def _notify_all(self, events: typing.Iterable[int]):
         await asyncio.gather(
-            *[self._notify_single(ep) for ep in self.subscribed_endpoints]
+            *[
+                self._notify_single(ep, events=events)
+                for ep in self.subscribed_endpoints
+            ]
         )
 
-    def notify_once(self):
+    def notify_once(self, events: typing.Iterable[int]):
         """
-        Notify all subscribers about the current :attr:`value`.
+        Send a notification for all given event ids to all subscribers using the
+        current event values set in :attr:`values`.
         """
         if not self.has_clients.is_set():
             return
-        asyncio.create_task(self._notify_all())
+        asyncio.create_task(self._notify_all(events=events))
 
     @utils.log_exceptions()
     async def cyclic_notify(self, interval: float) -> None:
         """
-        Schedule notifications for all subscribers with a given interval.
+        Schedule notifications for all events to all subscribers with a given interval.
         This coroutine is scheduled as a task by :meth:`__init__` if given a
         non-zero interval.
 
@@ -107,7 +122,7 @@ class SimpleEventgroup:
             # wait for one interval *before* sending next
             await asyncio.sleep(interval)
 
-            await self._notify_all()
+            await self._notify_all(events=self.values.keys())
 
     def subscribe(self, endpoint: header.EndpointOption[typing.Any]) -> None:
         """
@@ -119,7 +134,7 @@ class SimpleEventgroup:
         self.subscribed_endpoints.add(endpoint)
         self.has_clients.set()
         # send initial eventgroup notification
-        asyncio.create_task(self._notify_single(endpoint))
+        asyncio.create_task(self._notify_single(endpoint, events=self.values.keys()))
 
     def unsubscribe(self, endpoint: header.EndpointOption[typing.Any]) -> None:
         """

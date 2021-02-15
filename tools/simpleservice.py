@@ -25,7 +25,7 @@ class TimeEvgrp(SimpleEventgroup):
 
     async def update(self):
         while True:
-            self.value = self.service.get_time()
+            self.values[0x0001] = self.service.get_time()
             await asyncio.sleep(0.9)
 
 
