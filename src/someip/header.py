@@ -124,6 +124,9 @@ payload: {len(self.payload)} bytes"""
         except ValueError as exc:
             raise ParseError("bad someip return code {rc_b:#x}") from exc
 
+        if size < 8:
+            raise ParseError("SOMEIP length must be at least 8")
+
         return (
             size,
             lambda payload_b: cls(
