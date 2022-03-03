@@ -595,9 +595,7 @@ class ServiceSubscriber:
         # relies on _subscribe() to send out the Subscribe messages in the next cycle.
         self.subscribeentries.append((eventgroup, endpoint))
 
-        if not self.timings.SUBSCRIBE_REFRESH_INTERVAL and self.alive:
-            # when TTL=forever, _subscribe() task does not run continuously, so we need
-            # to send individual subscribe entries directly
+        if self.alive:
             asyncio.get_event_loop().call_soon(
                 self._send_start_subscribe, endpoint, [eventgroup]
             )
@@ -880,9 +878,6 @@ class ServiceDiscover:
         self.watcher_all_services.add(listener)
 
     def find_subscribe_eventgroup(self, eventgroup: someip.config.Eventgroup):
-        # FIXME: ServiceSubscriber will probably introduce a delay of one refresh
-        # interval. workaround would be setting SUBSCRIBE_REFRESH_INTERVAL=0 and
-        # SUBSCRIBE_TTL=TTL_FOREVER
         self.watch_service(
             eventgroup.as_service(),
             AutoSubscribeServiceListener(self.sd.subscriber, eventgroup),
