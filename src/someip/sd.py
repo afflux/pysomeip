@@ -1047,7 +1047,7 @@ class EventgroupSubscription:
         return dataclasses.replace(self, ttl=0).to_ack_entry()
 
 
-class NakSubscription(Exception):
+class NakSubscription(Exception):  # noqa: N818
     pass
 
 
