@@ -712,16 +712,10 @@ class ClientServiceListener:
         ...
 
 
+@dataclasses.dataclass(frozen=True)
 class AutoSubscribeServiceListener(ClientServiceListener):
-    def __init__(
-        self,
-        subscriber: ServiceSubscriber,
-        eventgroup: someip.config.Eventgroup,
-        ttl=3,
-    ):
-        self.subscriber = subscriber
-        self.eventgroup = eventgroup
-        self.ttl = ttl
+    subscriber: ServiceSubscriber
+    eventgroup: someip.config.Eventgroup
 
     def service_offered(
         self, service: someip.config.Service, source: _T_SOCKADDR
@@ -874,11 +868,49 @@ class ServiceDiscover:
     ) -> None:
         self.watched_services[service].add(listener)
 
+        for addr, services in self.found_services.store.items():
+            for s in services:
+                if service.matches_service(s):
+                    asyncio.get_event_loop().call_soon(
+                        listener.service_offered, s, addr
+                    )
+
+    def stop_watch_service(
+        self, service: someip.config.Service, listener: ClientServiceListener
+    ) -> None:
+        self.watched_services[service].remove(listener)
+
+        # TODO verify if this makes sense
+        for addr, services in self.found_services.store.items():
+            for s in services:
+                if service.matches_service(s):
+                    asyncio.get_event_loop().call_soon(
+                        listener.service_stopped, s, addr
+                    )
+
     def watch_all_services(self, listener: ClientServiceListener) -> None:
         self.watcher_all_services.add(listener)
 
+        for addr, services in self.found_services.store.items():
+            for s in services:
+                asyncio.get_event_loop().call_soon(listener.service_offered, s, addr)
+
+    def stop_watch_all_services(self, listener: ClientServiceListener) -> None:
+        self.watcher_all_services.remove(listener)
+
+        # TODO verify if this makes sense
+        for addr, services in self.found_services.store.items():
+            for s in services:
+                asyncio.get_event_loop().call_soon(listener.service_stopped, s, addr)
+
     def find_subscribe_eventgroup(self, eventgroup: someip.config.Eventgroup):
         self.watch_service(
+            eventgroup.as_service(),
+            AutoSubscribeServiceListener(self.sd.subscriber, eventgroup),
+        )
+
+    def stop_find_subscribe_eventgroup(self, eventgroup: someip.config.Eventgroup):
+        self.stop_watch_service(
             eventgroup.as_service(),
             AutoSubscribeServiceListener(self.sd.subscriber, eventgroup),
         )
