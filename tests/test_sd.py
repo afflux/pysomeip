@@ -662,13 +662,113 @@ class TestSDDiscoveryTTLForever(_BaseSDDiscoveryTest):
         )
 
     async def test_sd_ignore(self):
-        self.prot.watcher_all_services.remove(self.mock)
+        self.prot.stop_watch_all_services(self.mock)
+
+        await settle()
+        self.assertCountEqual(
+            self.mock.method_calls,
+            [
+                unittest.mock.call.service_stopped(self.cfg_offer_5566, self.fake_addr),
+                unittest.mock.call.service_stopped(self.cfg_offer_5567, self.fake_addr),
+            ],
+        )
+
+        self.mock.reset_mock()
+
         offer_7777 = replace(self.offer_5566, service_id=0x7777)
         self.prot.handle_offer(offer_7777, self.fake_addr)
 
         await settle()
 
         self.assertEqual(self.mock.method_calls, [])
+
+    async def test_watch_all_while_running(self):
+        newmock = unittest.mock.Mock()
+        self.prot.watch_all_services(newmock)
+        await settle()
+
+        self.assertEqual(
+            newmock.service_offered.call_args_list,
+            [
+                unittest.mock.call(self.cfg_offer_5566, self.fake_addr),
+                unittest.mock.call(self.cfg_offer_5567, self.fake_addr),
+            ],
+        )
+
+        newmock.service_stopped.assert_not_called()
+
+    async def test_stop_watch_all(self):
+        self.prot.stop_watch_all_services(self.mock)
+        await settle()
+
+        self.assertEqual(
+            self.mock.service_stopped.call_args_list,
+            [
+                unittest.mock.call(self.cfg_offer_5566, self.fake_addr),
+                unittest.mock.call(self.cfg_offer_5567, self.fake_addr),
+            ],
+        )
+
+        self.mock.reset_mock()
+
+        offer_5568 = replace(self.offer_5566, service_id=0x5568)
+        self.prot.handle_offer(offer_5568, self.fake_addr)
+        await settle()
+
+        self.assertEqual(self.mock.method_calls, [])
+
+    async def test_stop_watch_single(self):
+        self.prot.stop_watch_service(cfg.Service(service_id=0x5566), self.mock_single)
+        await settle()
+
+        self.assertEqual(
+            self.mock_single.service_stopped.call_args_list,
+            [
+                unittest.mock.call(self.cfg_offer_5566, self.fake_addr),
+            ],
+        )
+
+        self.mock_single.reset_mock()
+
+        # clear already known services to re-trigger callbacks
+        self.prot.found_services.stop_all()
+        await settle()
+        self.assertEqual(self.mock_single.method_calls, [])
+
+        # after found_services.stop_all(), new offer would trigger callbacks,
+        # but the listener is removed
+        self.prot.handle_offer(self.offer_5566, self.fake_addr)
+        await settle()
+        self.assertEqual(self.mock_single.method_calls, [])
+
+    async def test_watch_while_running(self):
+        self.prot.stop_watch_all_services(self.mock)
+        await settle()
+
+        newmock = unittest.mock.Mock()
+        self.prot.watch_service(cfg.Service(service_id=0x5566), newmock)
+        await settle()
+
+        self.assertEqual(
+            newmock.service_offered.call_args_list,
+            [unittest.mock.call(self.cfg_offer_5566, self.fake_addr)],
+        )
+
+        newmock.service_stopped.assert_not_called()
+
+        # 0x5567 was previously monitored from watch_all_services
+        # TTL is forever, so it's still in the found_services list
+        # so it will immediately trigger a service_offered callback
+        newmock = unittest.mock.Mock()
+        self.prot.watch_service(cfg.Service(service_id=0x5567), newmock)
+        await settle()
+
+        self.assertEqual(
+            newmock.service_offered.call_args_list,
+            [unittest.mock.call(self.cfg_offer_5567, self.fake_addr)],
+        )
+
+        newmock.service_stopped.assert_not_called()
 
 
 class TestSDDiscoveryTTL1(_BaseSDDiscoveryTest):
@@ -808,6 +908,106 @@ class TestSDDiscoveryTTL1(_BaseSDDiscoveryTest):
 
         self.assertEqual(self.mock_single.method_calls, [])
 
+    async def test_watch_all_while_running(self):
+        newmock = unittest.mock.Mock()
+        self.prot.watch_all_services(newmock)
+        await settle()
+
+        self.assertEqual(
+            newmock.service_offered.call_args_list,
+            [
+                unittest.mock.call(self.cfg_offer_5566, self.fake_addr),
+                unittest.mock.call(self.cfg_offer_5567, self.fake_addr),
+            ],
+        )
+
+        newmock.service_stopped.assert_not_called()
+
+    async def test_stop_watch_all(self):
+        self.prot.stop_watch_all_services(self.mock)
+        await settle()
+
+        self.assertEqual(
+            self.mock.service_stopped.call_args_list,
+            [
+                unittest.mock.call(self.cfg_offer_5566, self.fake_addr),
+                unittest.mock.call(self.cfg_offer_5567, self.fake_addr),
+            ],
+        )
+
+        self.mock.reset_mock()
+
+        # time out all offers
+        await asyncio.sleep(1.2)
+
+        offer_5568 = replace(self.offer_5566, service_id=0x5568)
+        self.prot.handle_offer(offer_5568, self.fake_addr)
+        self.prot.handle_offer(self.offer_5566, self.fake_addr)
+        await settle()
+
+        self.assertEqual(self.mock.method_calls, [])
+
+    async def test_stop_watch_single(self):
+        self.prot.stop_watch_service(cfg.Service(service_id=0x5566), self.mock_single)
+        await settle()
+
+        self.assertEqual(
+            self.mock_single.service_stopped.call_args_list,
+            [
+                unittest.mock.call(self.cfg_offer_5566, self.fake_addr),
+            ],
+        )
+
+        self.mock_single.reset_mock()
+
+        # time out all offers
+        await asyncio.sleep(1.2)
+        self.assertEqual(self.mock_single.method_calls, [])
+
+        # after found_services.stop_all(), new offer would trigger callbacks,
+        # but the listener is removed
+        self.prot.handle_offer(self.offer_5566, self.fake_addr)
+        await settle()
+        self.assertEqual(self.mock_single.method_calls, [])
+
+    async def test_watch_while_running(self):
+        self.prot.stop_watch_all_services(self.mock)
+        await settle()
+
+        # 0x5566 is still monitored from watch_service(0x5566)
+        newmock = unittest.mock.Mock()
+        self.prot.watch_service(cfg.Service(service_id=0x5566), newmock)
+        await settle()
+
+        self.assertEqual(
+            newmock.service_offered.call_args_list,
+            [unittest.mock.call(self.cfg_offer_5566, self.fake_addr)],
+        )
+
+        newmock.service_stopped.assert_not_called()
+
+        # 0x5567 is not monitored since stop_watch_all_services()
+        # TTL is 1, therefore the service will expire from found_services
+        await asyncio.sleep(0.6)
+        self.prot.handle_offer(self.offer_5567, self.fake_addr)
+        await asyncio.sleep(0.6)
+        self.prot.handle_offer(self.offer_5567, self.fake_addr)
+        await settle()
+
+        newmock = unittest.mock.Mock()
+        self.prot.watch_service(cfg.Service(service_id=0x5567), newmock)
+        await settle()
+
+        newmock.service_offered.assert_not_called()
+        newmock.service_stopped.assert_not_called()
+
+        self.prot.handle_offer(self.offer_5567, self.fake_addr)
+        await settle()
+
+        self.assertEqual(
+            newmock.service_offered.call_args_list,
+            [unittest.mock.call(self.cfg_offer_5567, self.fake_addr)],
+        )
 
 # }}}
 
@@ -983,16 +1183,16 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase, _SendTiming):
     async def test_find_subscribe(self):
         local_addr = ("2001:db8::1111", 3333, 0, 0)
 
-        self.prot.find_subscribe_eventgroup(
-            cfg.Eventgroup(
-                service_id=0x5566,
-                instance_id=0xFFFF,
-                major_version=0xFF,
-                eventgroup_id=0x0000AAAA,
-                sockname=local_addr,
-                protocol=hdr.L4Protocols.UDP,
-            )
+        cfg_eventgroup = cfg.Eventgroup(
+            service_id=0x5566,
+            instance_id=0xFFFF,
+            major_version=0xFF,
+            eventgroup_id=0x0000AAAA,
+            sockname=local_addr,
+            protocol=hdr.L4Protocols.UDP,
         )
+
+        self.prot.find_subscribe_eventgroup(cfg_eventgroup)
 
         t = asyncio.create_task(self.prot.send_find_services())
 
@@ -1016,6 +1216,7 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase, _SendTiming):
 
         self.prot.handle_offer(data, self.fake_addr)
 
+        # let offer time out
         await asyncio.sleep(ticks(10.1))
         await t
 
@@ -1036,6 +1237,11 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase, _SendTiming):
             protocol=hdr.L4Protocols.UDP,
         )
 
+        self.prot.handle_offer(data, self.fake_addr)
+        await asyncio.sleep(ticks(2))
+        self.prot.stop_find_subscribe_eventgroup(cfg_eventgroup)
+        await asyncio.sleep(ticks(1))
+
         self.assertTiming(
             (2, self._mock_send_sd, unittest.mock.call([find])),
             (
@@ -1047,6 +1253,16 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase, _SendTiming):
                 12.5,
                 self._mock_subscribe_stop,
                 unittest.mock.call(evgrp, self.fake_addr, send=False),
+            ),
+            (
+                12.5,
+                self._mock_subscribe_start,
+                unittest.mock.call(evgrp, self.fake_addr),
+            ),
+            (
+                14.5,
+                self._mock_subscribe_stop,
+                unittest.mock.call(evgrp, self.fake_addr),
             ),
         )
 
