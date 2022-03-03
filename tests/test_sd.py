@@ -1130,6 +1130,17 @@ class TestSubscribeEventgroupTTL3(TestSubscribeEventgroup):
         # add new eventgroup, show subscription in next cycle
         self.prot.subscribe_eventgroup(self.evgrp_3, self.remote1_addr)
 
+        await asyncio.sleep(0.1)
+
+        self.assertCountEqual(
+            self._mock_send_sd.call_args_list,
+            (
+                unittest.mock.call([self.sub_evgrp_3], remote=self.remote1_addr),
+            ),
+        )
+        self._mock_send_sd.reset_mock()
+
+        # wait one refresh cycle
         await asyncio.sleep(1)
 
         self.assertCountEqual(
