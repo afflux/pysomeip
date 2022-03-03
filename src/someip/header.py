@@ -765,7 +765,7 @@ class AbstractIPOption(SOMEIPSDAbstractOption, typing.Generic[T]):
     """
 
     _format: typing.ClassVar[struct.Struct]
-    _address_type: typing.ClassVar[typing.Type[T]]
+    _address_type: typing.ClassVar[typing.Type[typing.Any]]
     _family: typing.ClassVar[socket.AddressFamily]
     address: T
     l4proto: typing.Union[L4Protocols, int]
