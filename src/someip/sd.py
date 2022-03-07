@@ -734,7 +734,7 @@ class AutoSubscribeServiceListener(ClientServiceListener):
         if not eventgroup:  # pragma: nocover
             return
         # TODO support TCP event groups: application (or lib?) needs to close connection
-        self.subscriber.stop_subscribe_eventgroup(eventgroup, source, send=False)
+        self.subscriber.stop_subscribe_eventgroup(eventgroup, source)
 
 
 KT = typing.TypeVar("KT")
