@@ -1252,7 +1252,7 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase, _SendTiming):
             (
                 12.5,
                 self._mock_subscribe_stop,
-                unittest.mock.call(evgrp, self.fake_addr, send=False),
+                unittest.mock.call(evgrp, self.fake_addr),
             ),
             (
                 12.5,
@@ -1350,9 +1350,7 @@ class TestSubscribeEventgroupTTL3(TestSubscribeEventgroup):
 
         self.assertCountEqual(
             self._mock_send_sd.call_args_list,
-            (
-                unittest.mock.call([self.sub_evgrp_3], remote=self.remote1_addr),
-            ),
+            (unittest.mock.call([self.sub_evgrp_3], remote=self.remote1_addr),),
         )
         self._mock_send_sd.reset_mock()
 
