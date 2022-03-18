@@ -1009,6 +1009,7 @@ class TestSDDiscoveryTTL1(_BaseSDDiscoveryTest):
             [unittest.mock.call(self.cfg_offer_5567, self.fake_addr)],
         )
 
+
 # }}}
 
 
@@ -1808,6 +1809,37 @@ class TestSDAnnounce(unittest.IsolatedAsyncioTestCase, _SendTiming):
             ),
         )
 
+    async def test_announce_stop_single_service(self):
+        self.prot.timings.CYCLIC_OFFER_DELAY = ticks(1)
+
+        self.prot.start()
+        await asyncio.sleep(ticks(0.9))
+        self.reset_mock()
+
+        self.prot.stop_announce_service(self.cfg_service_5566, self.listener_5566)
+        await asyncio.sleep(ticks(0.01))
+        self.assertTiming(
+            (
+                0.9,
+                self._mock_send_sd,
+                unittest.mock.call(
+                    [self.cfg_service_5566.create_offer_entry(0)], remote=None
+                ),
+            ),
+        )
+        self.reset_mock()
+
+        await asyncio.sleep(ticks(0.2))
+        self.assertTiming(
+            (
+                1.0,
+                self._mock_send_sd,
+                unittest.mock.call(
+                    [self.cfg_service_2233.create_offer_entry(self.TTL)], remote=None
+                ),
+            ),
+        )
+
 
 # }}}
 
@@ -1949,12 +1981,27 @@ class _BaseSDSubscriptionTest(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def _test_sd_stopping_service(self):
+        self.prot.stop_announce_service(self.cfg_5566, self.mock._5566)
+
+        await settle()
+
+        self.assertEqual(
+            self.mock.method_calls,
+            [
+                unittest.mock.call._5566.client_unsubscribed(
+                    self.subscription_5566_3333, self.fake_sd_addr
+                ),
+            ],
+        )
+
 
 class TestSDSubscriptionTTLForever(_BaseSDSubscriptionTest):
     TTL = sd.TTL_FOREVER
 
     test_sd_reject_subscription = _BaseSDSubscriptionTest._test_sd_reject_subscription
     test_sd_disconnect = _BaseSDSubscriptionTest._test_sd_disconnect
+    test_sd_stopping_service = _BaseSDSubscriptionTest._test_sd_stopping_service
 
     async def test_sd_reboot_ttl_forever(self):
         await self.prot.handle_subscribe(self.subscribe_5566_3333, self.fake_sd_addr)
@@ -2050,6 +2097,7 @@ class TestSDSubscriptionTTL1(_BaseSDSubscriptionTest):
 
     test_sd_reject_subscription = _BaseSDSubscriptionTest._test_sd_reject_subscription
     test_sd_disconnect = _BaseSDSubscriptionTest._test_sd_disconnect
+    test_sd_stopping_service = _BaseSDSubscriptionTest._test_sd_stopping_service
 
     async def test_sd_reboot(self):
         self.prot.reboot_detected(self.fake_sd_addr)
