@@ -803,6 +803,17 @@ class TimedStore(typing.Generic[KT]):
             self.stop_all_for_address(addr)
         self.store.clear()
 
+    def stop_all_matching(self, match: typing.Callable[[KT], bool]) -> None:
+        stopping_entries = [
+            (ep, entry)
+            for ep, entries in self.store.items()
+            for entry in entries
+            if match(entry)
+        ]
+
+        for endpoint, entry in stopping_entries:
+            self.stop(endpoint, entry)
+
     def _expired(self, address: _T_SOCKADDR, entry: KT) -> None:
         try:
             callback, _ = self.store[address].pop(entry)
@@ -1109,6 +1120,10 @@ class ServiceAnnouncer:
             asyncio.get_event_loop().call_soon(
                 functools.partial(self._send_offers, ((service, listener),), stop=True),
             )
+
+        self.subscriptions.stop_all_matching(
+            lambda evgr: evgr.service_id == service.service_id
+        )
 
     @log_exceptions()
     async def handle_subscribe(
