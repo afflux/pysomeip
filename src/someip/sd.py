@@ -28,7 +28,7 @@ TTL_FOREVER = 0xFFFFFF
 
 
 def ip_address(s: str) -> _T_IPADDR:
-    return typing.cast(_T_IPADDR, ipaddress.ip_address(s.split("%", 1)[0]))
+    return ipaddress.ip_address(s.split("%", 1)[0])
 
 
 def pack_addr_v4(a):
