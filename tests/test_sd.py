@@ -93,13 +93,16 @@ class _SendTiming(unittest.TestCase):
 
         # self.assertEqual(len(self.send_times), len(expected))
         for i, (expected_td, mock, expected_call) in enumerate(expected):
+            self.assertNotEqual(
+                len(mock.call_args_list), 0, msg=f"index {i} not called"
+            )
             actual_call = mock.call_args_list.pop(0)
             actual_td = tdiffs[mock].pop(0)
             self.assertEqual(actual_call, expected_call, msg=f"index {i} failed")
             self.assertLess(
                 abs(ticks(expected_td) - actual_td),
                 PRECISION,
-                msg=f"{ticks(expected_td)=} {actual_td=}",
+                msg=f"index {i} timing failed: {ticks(expected_td)=} {actual_td=}",
             )
 
         self.assertDictEqual(
