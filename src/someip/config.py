@@ -136,9 +136,9 @@ class Service:
     """
 
     service_id: int
-    instance_id: int = dataclasses.field(default=0xFFFF)
-    major_version: int = dataclasses.field(default=0xFF)
-    minor_version: int = dataclasses.field(default=0xFFFFFFFF)
+    instance_id: int = 0xFFFF
+    major_version: int = 0xFF
+    minor_version: int = 0xFFFFFFFF
 
     options_1: typing.Tuple[someip.header.SOMEIPSDOption, ...] = dataclasses.field(
         default=(), compare=False
@@ -147,7 +147,7 @@ class Service:
         default=(), compare=False
     )
 
-    eventgroups: typing.FrozenSet[int] = dataclasses.field(default=frozenset())
+    eventgroups: typing.FrozenSet[int] = frozenset()
 
     def matches_offer(self, entry: someip.header.SOMEIPSDEntry) -> bool:
         """

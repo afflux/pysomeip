@@ -81,9 +81,9 @@ class SOMEIPHeader:
     session_id: int
     interface_version: int
     message_type: SOMEIPMessageType
-    protocol_version: int = dataclasses.field(default=1)
-    return_code: SOMEIPReturnCode = dataclasses.field(default=SOMEIPReturnCode.E_OK)
-    payload: bytes = dataclasses.field(default=b"")
+    protocol_version: int = 1
+    return_code: SOMEIPReturnCode = SOMEIPReturnCode.E_OK
+    payload: bytes = b""
 
     @property
     def description(self):  # pragma: nocover
@@ -283,13 +283,13 @@ class SOMEIPSDEntry:
     ttl: int
     minver_or_counter: int
 
-    options_1: typing.Tuple[SOMEIPSDOption, ...] = dataclasses.field(default=())
-    options_2: typing.Tuple[SOMEIPSDOption, ...] = dataclasses.field(default=())
+    options_1: typing.Tuple[SOMEIPSDOption, ...] = ()
+    options_2: typing.Tuple[SOMEIPSDOption, ...] = ()
 
-    option_index_1: typing.Optional[int] = dataclasses.field(default=None)
-    option_index_2: typing.Optional[int] = dataclasses.field(default=None)
-    num_options_1: typing.Optional[int] = dataclasses.field(default=None)
-    num_options_2: typing.Optional[int] = dataclasses.field(default=None)
+    option_index_1: typing.Optional[int] = None
+    option_index_2: typing.Optional[int] = None
+    num_options_1: typing.Optional[int] = None
+    num_options_2: typing.Optional[int] = None
 
     def __str__(self) -> str:  # pragma: nocover
         if self.sd_type in (
@@ -913,10 +913,10 @@ class SOMEIPSDHeader:
     """
 
     entries: typing.Tuple[SOMEIPSDEntry, ...]
-    options: typing.Tuple[SOMEIPSDOption, ...] = dataclasses.field(default=())
-    flag_reboot: bool = dataclasses.field(default=False)
-    flag_unicast: bool = dataclasses.field(default=True)
-    flags_unknown: int = dataclasses.field(default=0)
+    options: typing.Tuple[SOMEIPSDOption, ...] = ()
+    flag_reboot: bool = False
+    flag_unicast: bool = True
+    flags_unknown: int = 0
 
     def resolve_options(self):
         """
