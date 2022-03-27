@@ -17,10 +17,16 @@ import someip.config as cfg
 import someip.sd as sd
 
 logging.captureWarnings(True)
-logging.basicConfig(level=logging.DEBUG)
+
+handler = logging.StreamHandler()
+handler.setFormatter(
+    logging.Formatter("%(asctime)s %(levelname)-10s %(name)s: %(message)s")
+)
+handler.setLevel(logging.DEBUG)
 
 logging.getLogger("asyncio").setLevel(logging.WARNING)
 logging.getLogger("someip").setLevel(logging.WARNING)
+logging.getLogger().addHandler(handler)
 
 
 PRECISION = 0.4 if os.environ.get("CI") == "true" else 0.2  # in seconds
