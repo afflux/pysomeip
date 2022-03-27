@@ -191,8 +191,8 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
         # session_id wraps to 1 instead of 0
         r = itertools.chain(
             range(1, 0x10000),
-            range(0x100001, 0x20000),
-            range(0x200001, 0x20020),
+            range(0x10001, 0x20000),
+            range(0x20001, 0x20020),
         )
 
         for i in r:
