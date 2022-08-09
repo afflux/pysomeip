@@ -793,7 +793,11 @@ class TimedStore(typing.Generic[KT]):
         if _timeout_handle:
             _timeout_handle.cancel()
 
-        asyncio.get_event_loop().call_soon(callback, entry, address)
+        # this must be called immediately - otherwise pairs of StopSubscribe/Subscribe
+        # would not be handled correctly. If this were deferred to the event loop,
+        # callback_new would also need to run deferred, but then NakSubscription errors
+        # would not propagate to the sender
+        callback(entry, address)
 
     def stop_all_for_address(self, address: _T_SOCKADDR) -> None:
         for entry, (callback, handle) in self.store[address].items():
@@ -1377,6 +1381,7 @@ class ServiceAnnouncer:
                 asyncio.get_event_loop().call_later(delay, func, addr)
 
         else:
+
             def call(func) -> None:
                 asyncio.get_event_loop().call_soon(func, addr)
 

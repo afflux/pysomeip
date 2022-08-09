@@ -62,7 +62,10 @@ class SimpleEventgroup:
 
     @utils.log_exceptions()
     async def _notify_single(
-        self, endpoint: header.EndpointOption[typing.Any], events: typing.Iterable[int]
+        self,
+        endpoint: header.EndpointOption[typing.Any],
+        events: typing.Iterable[int],
+        label: str,
     ) -> None:
         addr = await endpoint.addrinfo()
 
@@ -70,7 +73,7 @@ class SimpleEventgroup:
         for event_id in events:
             payload = self.values[event_id]
 
-            self.log.info("notifying 0x%04x to %r: %r", event_id, addr, payload)
+            self.log.info("%s notify 0x%04x to %r: %r", label, event_id, addr, payload)
 
             _, session_id = self.service.session_storage.assign_outgoing(addr)
             hdr = header.SOMEIPHeader(
@@ -89,10 +92,10 @@ class SimpleEventgroup:
             self.service.send(msgbuf, addr)
 
     @utils.log_exceptions()
-    async def _notify_all(self, events: typing.Iterable[int]):
+    async def _notify_all(self, events: typing.Iterable[int], label: str):
         await asyncio.gather(
             *[
-                self._notify_single(ep, events=events)
+                self._notify_single(ep, events=events, label=label)
                 for ep in self.subscribed_endpoints
             ]
         )
@@ -104,7 +107,7 @@ class SimpleEventgroup:
         """
         if not self.has_clients.is_set():
             return
-        asyncio.create_task(self._notify_all(events=events))
+        asyncio.create_task(self._notify_all(events=events, label="event"))
 
     @utils.log_exceptions()
     async def cyclic_notify(self, interval: float) -> None:
@@ -122,7 +125,7 @@ class SimpleEventgroup:
             # wait for one interval *before* sending next
             await asyncio.sleep(interval)
 
-            await self._notify_all(events=self.values.keys())
+            await self._notify_all(events=self.values.keys(), label="cyclic")
 
     def subscribe(self, endpoint: header.EndpointOption[typing.Any]) -> None:
         """
@@ -134,7 +137,9 @@ class SimpleEventgroup:
         self.subscribed_endpoints.add(endpoint)
         self.has_clients.set()
         # send initial eventgroup notification
-        asyncio.create_task(self._notify_single(endpoint, events=self.values.keys()))
+        asyncio.create_task(
+            self._notify_single(endpoint, events=self.values.keys(), label="initial")
+        )
 
     def unsubscribe(self, endpoint: header.EndpointOption[typing.Any]) -> None:
         """
