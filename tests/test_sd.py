@@ -474,7 +474,7 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
             announce().method_calls,
             [
                 unittest.mock.call.handle_findservice(
-                    find_entry, self.fake_addr, False, True
+                    find_entry, self.fake_addr, False
                 ),
                 unittest.mock.call.handle_subscribe(subscribe_entry, self.fake_addr),
             ],
@@ -497,9 +497,7 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             announce().method_calls,
             [
-                unittest.mock.call.handle_findservice(
-                    find_entry, self.fake_addr, True, True
-                ),
+                unittest.mock.call.handle_findservice(find_entry, self.fake_addr, True),
             ],
         )
 
@@ -1516,6 +1514,7 @@ class TestSDAnnounce(unittest.IsolatedAsyncioTestCase, _SendTiming):
             REPETITIONS_BASE_DELAY=ticks(1),
             REQUEST_RESPONSE_DELAY_MIN=0,
             REQUEST_RESPONSE_DELAY_MAX=0,
+            SEND_COLLECTION_TIMEOUT=ticks(0.02),
         )
         mock_sd.log = logging.getLogger("someip.sd")
         mock_sd.send_sd = unittest.mock.Mock()
@@ -1557,8 +1556,14 @@ class TestSDAnnounce(unittest.IsolatedAsyncioTestCase, _SendTiming):
 
         self.listener_5566 = unittest.mock.Mock()
         self.listener_2233 = unittest.mock.Mock()
-        self.prot.announce_service(self.cfg_service_5566, self.listener_5566)
-        self.prot.announce_service(self.cfg_service_2233, self.listener_2233)
+        self.inst_5566 = sd.ServiceInstance(
+            self.cfg_service_5566, self.listener_5566, self.prot, mock_sd.timings
+        )
+        self.inst_2233 = sd.ServiceInstance(
+            self.cfg_service_2233, self.listener_2233, self.prot, mock_sd.timings
+        )
+        self.prot.announce_service(self.inst_5566)
+        self.prot.announce_service(self.inst_2233)
 
     async def test_announce_non_cyclic(self):
         self.prot.timings.REPETITIONS_MAX = 2
@@ -1580,14 +1585,17 @@ class TestSDAnnounce(unittest.IsolatedAsyncioTestCase, _SendTiming):
         )
 
         self.assertTiming(
+            # initial after INITIAL_DELAY
             (1, self._mock_send_sd, call),
+            # repetition 1 after 2**0 * REPETITIONS_BASE_DELAY == 1
             (2, self._mock_send_sd, call),
+            # repetition 2 after 2**1 * REPETITIONS_BASE_DELAY == 2
             (4, self._mock_send_sd, call),
         )
 
         self.reset_mock()
 
-        await asyncio.sleep(ticks(0.01))
+        await asyncio.sleep(ticks(0.03))
         self._mock_send_sd.assert_called_once_with(
             [
                 self.cfg_service_5566.create_offer_entry(0),
@@ -1613,17 +1621,23 @@ class TestSDAnnounce(unittest.IsolatedAsyncioTestCase, _SendTiming):
         )
 
         self.assertTiming(
+            # initial after INITIAL_DELAY
             (1, self._mock_send_sd, call),
+            # repetition 1 after 2**0 * REPETITIONS_BASE_DELAY == 1
             (2, self._mock_send_sd, call),
+            # repetition 2 after 2**1 * REPETITIONS_BASE_DELAY == 2
             (4, self._mock_send_sd, call),
+            # repetition 3 after 2**2 * REPETITIONS_BASE_DELAY == 4
             (8, self._mock_send_sd, call),
+            # cyclic offer after CYCLIC_OFFER_DELAY
             (10, self._mock_send_sd, call),
+            # cyclic offer after CYCLIC_OFFER_DELAY
             (12, self._mock_send_sd, call),
         )
 
         self.reset_mock()
 
-        await asyncio.sleep(ticks(0.01))
+        await asyncio.sleep(ticks(0.03))
         self._mock_send_sd.assert_called_once_with(
             [
                 self.cfg_service_5566.create_offer_entry(0),
@@ -1648,17 +1662,13 @@ class TestSDAnnounce(unittest.IsolatedAsyncioTestCase, _SendTiming):
     async def test_find_service_initial(self):
         data = self.cfg_service_5566.create_find_entry(self.TTL)
 
-        await self.prot.handle_findservice(
-            data, self.fake_addr, received_over_multicast=True, unicast_supported=True
-        )
+        self.prot.handle_findservice(data, self.fake_addr, received_over_multicast=True)
 
         self.assertTiming()
 
         self.prot.start()
         # sleep until middle of initial wait phase
-        await self.prot.handle_findservice(
-            data, self.fake_addr, received_over_multicast=True, unicast_supported=True
-        )
+        self.prot.handle_findservice(data, self.fake_addr, received_over_multicast=True)
         await asyncio.sleep(ticks(0.5))
         self.prot.stop()
 
@@ -1671,9 +1681,7 @@ class TestSDAnnounce(unittest.IsolatedAsyncioTestCase, _SendTiming):
         self.reset_mock()
 
         data = self.cfg_service_9999.create_find_entry()
-        await self.prot.handle_findservice(
-            data, self.fake_addr, received_over_multicast=True, unicast_supported=True
-        )
+        self.prot.handle_findservice(data, self.fake_addr, received_over_multicast=True)
 
         self.prot.stop()
 
@@ -1688,19 +1696,18 @@ class TestSDAnnounce(unittest.IsolatedAsyncioTestCase, _SendTiming):
         await asyncio.sleep(ticks(1))
         self.reset_mock()
 
-        await self.prot.handle_findservice(
+        self.prot.handle_findservice(
             self.cfg_service_5566.create_find_entry(),
             self.fake_addr,
             received_over_multicast=True,
-            unicast_supported=True,
         )
-        await self.prot.handle_findservice(
+        self.prot.handle_findservice(
             self.cfg_service_9999.create_find_entry(),
             self.fake_addr,
             received_over_multicast=True,
-            unicast_supported=True,
         )
 
+        await asyncio.sleep(ticks(1.03))
         self.prot.stop()
 
         self.assertTiming(
@@ -1723,19 +1730,18 @@ class TestSDAnnounce(unittest.IsolatedAsyncioTestCase, _SendTiming):
         await asyncio.sleep(ticks(1))
         self.reset_mock()
 
-        await self.prot.handle_findservice(
+        self.prot.handle_findservice(
             self.cfg_service_5566.create_find_entry(),
             self.fake_addr,
             received_over_multicast=False,
-            unicast_supported=True,
         )
-        await self.prot.handle_findservice(
+        self.prot.handle_findservice(
             self.cfg_service_9999.create_find_entry(),
             self.fake_addr,
             received_over_multicast=False,
-            unicast_supported=True,
         )
 
+        await asyncio.sleep(ticks(0.03))
         self.prot.stop()
 
         self.assertTiming(
@@ -1749,84 +1755,16 @@ class TestSDAnnounce(unittest.IsolatedAsyncioTestCase, _SendTiming):
             ),
         )
 
-    async def test_find_service_known_answer_multicast_supported(self):
-        self.prot.timings.INITIAL_DELAY_MIN = self.prot.timings.INITIAL_DELAY_MAX = 0
-        self.prot.timings.REQUEST_RESPONSE_DELAY_MIN = ticks(1)
-        self.prot.timings.REQUEST_RESPONSE_DELAY_MAX = ticks(1)
-
-        self.prot.start()
-        await asyncio.sleep(ticks(1))
-        self.reset_mock()
-
-        await self.prot.handle_findservice(
-            self.cfg_service_5566.create_find_entry(),
-            self.fake_addr,
-            received_over_multicast=True,
-            unicast_supported=False,
-        )
-        await self.prot.handle_findservice(
-            self.cfg_service_9999.create_find_entry(),
-            self.fake_addr,
-            received_over_multicast=True,
-            unicast_supported=False,
-        )
-
-        self.prot.stop()
-
-        self.assertTiming(
-            (
-                2,
-                self._mock_send_sd,
-                unittest.mock.call(
-                    [self.cfg_service_5566.create_offer_entry(self.TTL)], remote=None
-                ),
-            ),
-        )
-
-    async def test_find_service_known_answer_multicast_delay(self):
-        self.prot.timings.INITIAL_DELAY_MIN = self.prot.timings.INITIAL_DELAY_MAX = 0
-        self.prot.timings.REQUEST_RESPONSE_DELAY_MIN = ticks(1)
-        self.prot.timings.REQUEST_RESPONSE_DELAY_MAX = ticks(1)
-
-        self.prot.start()
-        await asyncio.sleep(ticks(11.5))
-        self.reset_mock()
-
-        await self.prot.handle_findservice(
-            self.cfg_service_5566.create_find_entry(),
-            self.fake_addr,
-            received_over_multicast=True,
-            unicast_supported=True,
-        )
-        await self.prot.handle_findservice(
-            self.cfg_service_9999.create_find_entry(),
-            self.fake_addr,
-            received_over_multicast=True,
-            unicast_supported=True,
-        )
-
-        await asyncio.sleep(ticks(1.1))
-        self.prot.stop()
-
-        self.assertTiming(
-            (
-                12.5,
-                self._mock_send_sd,
-                unittest.mock.call(
-                    [self.cfg_service_5566.create_offer_entry(self.TTL)], remote=None
-                ),
-            ),
-        )
-
     async def test_announce_stop_single_service(self):
+        self.prot.timings.INITIAL_DELAY_MIN = self.prot.timings.INITIAL_DELAY_MAX = 0
         self.prot.timings.CYCLIC_OFFER_DELAY = ticks(1)
 
         self.prot.start()
         await asyncio.sleep(ticks(0.9))
         self.reset_mock()
 
-        self.prot.stop_announce_service(self.cfg_service_5566, self.listener_5566)
-        await asyncio.sleep(ticks(0.01))
+        self.prot.stop_announce_service(self.inst_5566)
+        await asyncio.sleep(ticks(0.03))
         self.assertTiming(
             (
                 0.9,
@@ -1861,7 +1799,11 @@ class _BaseSDSubscriptionTest(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):  # noqa: N802
         mock_sd = unittest.mock.Mock(spec_set=["timings", "log", "send_sd"])
-        mock_sd.timings = sd.Timings()
+        mock_sd.timings = sd.Timings(
+            INITIAL_DELAY_MIN=0,
+            INITIAL_DELAY_MAX=0,
+            REPETITIONS_MAX=0,
+        )
         mock_sd.log = logging.getLogger("someip.sd")
         mock_sd.send_sd = unittest.mock.Mock()
         self._mock_send_sd = mock_sd.send_sd
@@ -1904,12 +1846,23 @@ class _BaseSDSubscriptionTest(unittest.IsolatedAsyncioTestCase):
         self.stop_subscribe_5566_3333 = replace(self.subscribe_5566_3333, ttl=0)
 
         self.mock = unittest.mock.Mock()
-        self.prot.announce_service(self.cfg_5566, self.mock._5566)
-        self.prot.announce_service(self.cfg_5567, self.mock._5567)
+        self.inst_5566 = sd.ServiceInstance(
+            self.cfg_5566, self.mock._5566, self.prot, mock_sd.timings
+        )
+        self.inst_5567 = sd.ServiceInstance(
+            self.cfg_5567, self.mock._5567, self.prot, mock_sd.timings
+        )
+        self.prot.announce_service(self.inst_5566)
+        self.prot.announce_service(self.inst_5567)
 
-        await self.prot.handle_subscribe(self.subscribe_5566_3333, self.fake_sd_addr)
+        self.prot.start()
 
-        await settle()
+        await asyncio.sleep(ticks(0.03))
+        self.reset_mock()
+
+        self.prot.handle_subscribe(self.subscribe_5566_3333, self.fake_sd_addr)
+
+        await asyncio.sleep(ticks(0.03))
 
         self._mock_send_sd.assert_called_once_with(
             [self.ack_5566_3333], remote=self.fake_sd_addr
@@ -1934,15 +1887,13 @@ class _BaseSDSubscriptionTest(unittest.IsolatedAsyncioTestCase):
 
     async def _test_sd_reject_subscription(self):
         self.mock._5566.client_subscribed.side_effect = sd.NakSubscription
-        await self.prot.handle_subscribe(
-            self.stop_subscribe_5566_3333, self.fake_sd_addr
-        )
-        await settle()
+        self.prot.handle_subscribe(self.stop_subscribe_5566_3333, self.fake_sd_addr)
+        await asyncio.sleep(ticks(0.03))
 
         self.reset_mock()
 
-        await self.prot.handle_subscribe(self.subscribe_5566_3333, self.fake_sd_addr)
-        await settle()
+        self.prot.handle_subscribe(self.subscribe_5566_3333, self.fake_sd_addr)
+        await asyncio.sleep(ticks(0.03))
 
         self._mock_send_sd.assert_called_once_with(
             [self.nack_5566_3333], remote=self.fake_sd_addr
@@ -1960,8 +1911,8 @@ class _BaseSDSubscriptionTest(unittest.IsolatedAsyncioTestCase):
         self.reset_mock()
         self.mock._5566.client_subscribed.side_effect = None
 
-        await self.prot.handle_subscribe(self.subscribe_5566_3333, self.fake_sd_addr)
-        await settle()
+        self.prot.handle_subscribe(self.subscribe_5566_3333, self.fake_sd_addr)
+        await asyncio.sleep(ticks(0.03))
 
         self._mock_send_sd.assert_called_once_with(
             [self.ack_5566_3333], remote=self.fake_sd_addr
@@ -1991,9 +1942,9 @@ class _BaseSDSubscriptionTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def _test_sd_stopping_service(self):
-        self.prot.stop_announce_service(self.cfg_5566, self.mock._5566)
+        self.prot.stop_announce_service(self.inst_5566)
 
-        await settle()
+        await asyncio.sleep(ticks(0.03))
 
         self.assertEqual(
             self.mock.method_calls,
@@ -2013,8 +1964,8 @@ class TestSDSubscriptionTTLForever(_BaseSDSubscriptionTest):
     test_sd_stopping_service = _BaseSDSubscriptionTest._test_sd_stopping_service
 
     async def test_sd_reboot_ttl_forever(self):
-        await self.prot.handle_subscribe(self.subscribe_5566_3333, self.fake_sd_addr)
-        await settle()
+        self.prot.handle_subscribe(self.subscribe_5566_3333, self.fake_sd_addr)
+        await asyncio.sleep(ticks(0.03))
 
         self._mock_send_sd.assert_called_once_with(
             [self.ack_5566_3333], remote=self.fake_sd_addr
@@ -2023,8 +1974,8 @@ class TestSDSubscriptionTTLForever(_BaseSDSubscriptionTest):
         self.mock.assert_not_called()
         self.reset_mock()
 
-        await self.prot.handle_subscribe(self.subscribe_5566_3333, self.fake_sd_addr)
-        await settle()
+        self.prot.handle_subscribe(self.subscribe_5566_3333, self.fake_sd_addr)
+        await asyncio.sleep(ticks(0.03))
 
         self._mock_send_sd.assert_called_once_with(
             [self.ack_5566_3333], remote=self.fake_sd_addr
@@ -2035,8 +1986,8 @@ class TestSDSubscriptionTTLForever(_BaseSDSubscriptionTest):
 
         self.prot.reboot_detected(self.fake_sd_addr)
         await settle()
-        await self.prot.handle_subscribe(self.subscribe_5566_3333, self.fake_sd_addr)
-        await settle()
+        self.prot.handle_subscribe(self.subscribe_5566_3333, self.fake_sd_addr)
+        await asyncio.sleep(ticks(0.03))
 
         self._mock_send_sd.assert_called_once_with(
             [self.ack_5566_3333], remote=self.fake_sd_addr
@@ -2058,10 +2009,8 @@ class TestSDSubscriptionTTLForever(_BaseSDSubscriptionTest):
 
         # send stopsubscribe, should reach listener
 
-        await self.prot.handle_subscribe(
-            self.stop_subscribe_5566_3333, self.fake_sd_addr
-        )
-        await settle()
+        self.prot.handle_subscribe(self.stop_subscribe_5566_3333, self.fake_sd_addr)
+        await asyncio.sleep(ticks(0.03))
 
         self._mock_send_sd.assert_not_called()
 
@@ -2075,26 +2024,28 @@ class TestSDSubscriptionTTLForever(_BaseSDSubscriptionTest):
         )
 
     async def test_sd_multiple_listener(self):
-        await self.prot.handle_subscribe(
-            self.stop_subscribe_5566_3333, self.fake_sd_addr
-        )
-        await settle()
+        self.prot.handle_subscribe(self.stop_subscribe_5566_3333, self.fake_sd_addr)
+        await asyncio.sleep(ticks(0.03))
 
         self.reset_mock()
 
-        self.prot.announce_service(self.cfg_5566, self.mock._5566_2)
+        inst_5566_2 = sd.ServiceInstance(
+            self.cfg_5566, self.mock._5566_2, self.prot, self.prot.timings
+        )
+        self.prot.announce_service(inst_5566_2)
 
         with self.assertLogs("someip.sd.announce", "WARNING") as cm:
-            await self.prot.handle_subscribe(
-                self.subscribe_5566_3333, self.fake_sd_addr
-            )
-            await settle()
+            self.prot.handle_subscribe(self.subscribe_5566_3333, self.fake_sd_addr)
+            await asyncio.sleep(ticks(0.03))
         self.assertTrue(any("multiple configured" in msg for msg in cm.output))
 
         self.assertEqual(
             self.mock.method_calls,
             [
                 unittest.mock.call._5566.client_subscribed(
+                    self.subscription_5566_3333, self.fake_sd_addr
+                ),
+                unittest.mock.call._5566_2.client_subscribed(
                     self.subscription_5566_3333, self.fake_sd_addr
                 ),
             ],
@@ -2111,8 +2062,8 @@ class TestSDSubscriptionTTL1(_BaseSDSubscriptionTest):
     async def test_sd_reboot(self):
         self.prot.reboot_detected(self.fake_sd_addr)
         await settle()
-        await self.prot.handle_subscribe(self.subscribe_5566_3333, self.fake_sd_addr)
-        await settle()
+        self.prot.handle_subscribe(self.subscribe_5566_3333, self.fake_sd_addr)
+        await asyncio.sleep(ticks(0.03))
 
         self._mock_send_sd.assert_called_once_with(
             [self.ack_5566_3333], remote=self.fake_sd_addr
@@ -2139,8 +2090,8 @@ class TestSDSubscriptionTTL1(_BaseSDSubscriptionTest):
         self.mock.assert_not_called()
 
     async def test_sd(self):
-        await self.prot.handle_subscribe(self.subscribe_5566_3333, self.fake_sd_addr)
-        await settle()
+        self.prot.handle_subscribe(self.subscribe_5566_3333, self.fake_sd_addr)
+        await asyncio.sleep(ticks(0.03))
 
         self._mock_send_sd.assert_called_once_with(
             [self.ack_5566_3333], remote=self.fake_sd_addr
@@ -2150,10 +2101,8 @@ class TestSDSubscriptionTTL1(_BaseSDSubscriptionTest):
 
         await asyncio.sleep(0.2)
 
-        await self.prot.handle_subscribe(
-            self.stop_subscribe_5566_3333, self.fake_sd_addr
-        )
-        await settle()
+        self.prot.handle_subscribe(self.stop_subscribe_5566_3333, self.fake_sd_addr)
+        await asyncio.sleep(ticks(0.03))
 
         self.assertEqual(
             self.mock.method_calls,
@@ -2166,8 +2115,8 @@ class TestSDSubscriptionTTL1(_BaseSDSubscriptionTest):
 
         self.reset_mock()
 
-        await self.prot.handle_subscribe(self.subscribe_5566_3333, self.fake_sd_addr)
-        await settle()
+        self.prot.handle_subscribe(self.subscribe_5566_3333, self.fake_sd_addr)
+        await asyncio.sleep(ticks(0.03))
 
         self._mock_send_sd.assert_called_once_with(
             [self.ack_5566_3333], remote=self.fake_sd_addr
@@ -2200,19 +2149,15 @@ class TestSDSubscriptionTTL1(_BaseSDSubscriptionTest):
         # service already removed by timeout detection above.
         # send stopoffer again, should not reach listener
 
-        await self.prot.handle_subscribe(
-            self.stop_subscribe_5566_3333, self.fake_sd_addr
-        )
-        await settle()
+        self.prot.handle_subscribe(self.stop_subscribe_5566_3333, self.fake_sd_addr)
+        await asyncio.sleep(ticks(0.03))
 
         self.mock.assert_not_called()
 
     async def test_sd_unknown(self):
         with self.assertLogs("someip.sd.announce", "WARNING") as cm:
-            await self.prot.handle_subscribe(
-                self.subscribe_5566_1234, self.fake_sd_addr
-            )
-            await settle()
+            self.prot.handle_subscribe(self.subscribe_5566_1234, self.fake_sd_addr)
+            await asyncio.sleep(ticks(0.03))
 
         self.assertTrue(any("subscribe for unknown" in msg for msg in cm.output))
 
@@ -2440,6 +2385,11 @@ class TestMulticastEndpointsV6(
 
 
 # }}}
+
+
+if "unittest.util" in __import__("sys").modules:
+    # Show full diff in self.assertEqual.
+    __import__("sys").modules["unittest.util"]._MAX_LENGTH = 999999999
 
 
 if __name__ == "__main__":

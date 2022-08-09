@@ -231,7 +231,10 @@ class SimpleService(sd.SOMEIPDatagramProtocol, sd.ServerServiceListener):
         return prot
 
     def start_announce(self, announcer: sd.ServiceAnnouncer):
-        announcer.announce_service(self.as_config(), self)
+        instance = sd.ServiceInstance(
+            self.as_config(), self, announcer, announcer.timings
+        )
+        announcer.announce_service(instance)
 
     def stop_announce(self, announcer: sd.ServiceAnnouncer):
         announcer.stop_announce_service(self.as_config(), self)

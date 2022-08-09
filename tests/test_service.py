@@ -119,6 +119,10 @@ class TestService(unittest.IsolatedAsyncioTestCase):
 
     def test_start_announce(self):
         sd = unittest.mock.Mock()
+        # we don't want to track all the calls to log()
+        # direct attribute assignment would attach the sub-mock to the parent
+        # causing their calls to be tracked on the parent
+        object.__setattr__(sd, "log", unittest.mock.Mock())
 
         ip, port = ("192.0.2.42", 30501)
 
@@ -136,22 +140,23 @@ class TestService(unittest.IsolatedAsyncioTestCase):
             l4proto=hdr.L4Protocols.UDP,
         )
 
+        self.assertEqual(len(sd.method_calls), 1)
+        sd.announce_service.assert_called_once()
+        inst = sd.announce_service.call_args[0][0]
         self.assertEqual(
-            sd.method_calls,
-            [
-                unittest.mock.call.announce_service(
-                    cfg.Service(
-                        service_id=self.prot.service_id,
-                        instance_id=self.prot.instance_id,
-                        major_version=self.prot.version_major,
-                        minor_version=self.prot.version_minor,
-                        options_1=(ep,),
-                        eventgroups=frozenset({self.prot.eventgroup.id}),
-                    ),
-                    self.prot,
-                )
-            ],
+            inst.service,
+            cfg.Service(
+                service_id=self.prot.service_id,
+                instance_id=self.prot.instance_id,
+                major_version=self.prot.version_major,
+                minor_version=self.prot.version_minor,
+                options_1=(ep,),
+                eventgroups=frozenset({self.prot.eventgroup.id}),
+            ),
         )
+        self.assertEqual(inst.listener, self.prot)
+        self.assertEqual(inst.announcer, sd)
+        self.assertEqual(inst.timings, sd.timings)
         sd.reset_mock()
 
         self.prot.stop_announce(sd)

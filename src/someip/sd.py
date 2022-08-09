@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import collections
 import dataclasses
-import functools
 import ipaddress
 import itertools
 import logging
@@ -215,6 +214,7 @@ class Timings:
     ANNOUNCE_TTL: int = 3  # in seconds
     SUBSCRIBE_TTL: int = 5  # in seconds
     SUBSCRIBE_REFRESH_INTERVAL: typing.Optional[float] = 3  # in seconds
+    SEND_COLLECTION_TIMEOUT: float = 0.005  # in seconds
 
 
 class ServiceDiscoveryProtocol(SOMEIPDatagramProtocol):
@@ -506,6 +506,14 @@ class ServiceDiscoveryProtocol(SOMEIPDatagramProtocol):
             sdhdr,
         )
 
+        if not sdhdr.flag_unicast:
+            # R21-11 PRS_SOMEIPSD_00843 ignoring multicast-only SD messages
+            LOG.warning(
+                "discarding multicast-only SD message from %s",
+                format_address(addr),
+            )
+            return
+
         for entry in sdhdr.entries:
             if entry.sd_type == someip.header.SOMEIPSDEntryType.OfferService:
                 asyncio.get_event_loop().call_soon(
@@ -523,10 +531,8 @@ class ServiceDiscoveryProtocol(SOMEIPDatagramProtocol):
                 continue
 
             if entry.sd_type == someip.header.SOMEIPSDEntryType.FindService:
-                asyncio.create_task(
-                    self.announcer.handle_findservice(
-                        entry, addr, multicast, sdhdr.flag_unicast
-                    ),
+                self.announcer.handle_findservice(
+                    entry, addr, multicast
                 )
                 continue
 
@@ -540,7 +546,7 @@ class ServiceDiscoveryProtocol(SOMEIPDatagramProtocol):
                         entry,
                     )
                     continue
-                asyncio.create_task(self.announcer.handle_subscribe(entry, addr))
+                self.announcer.handle_subscribe(entry, addr)
                 continue
 
 
@@ -1078,116 +1084,100 @@ class ServerServiceListener:
 _T_SL = typing.Tuple[someip.config.Service, ServerServiceListener]
 
 
-class ServiceAnnouncer:
-    # TODO doc
-    def __init__(self, sd: ServiceDiscoveryProtocol):
-        self.sd = sd
-        self.timings = sd.timings
-        self.log = sd.log.getChild("announce")
-
-        self.task: typing.Optional[asyncio.Task[None]] = None
-        self.alive = False
-        self._can_answer_offers = False
-        self._last_multicast_offer: float = 0
-
-        self.announcing_services: typing.List[_T_SL] = []
-        self.subscriptions: TimedStore[EventgroupSubscription] = TimedStore(self.log)
-
-    def announce_service(
-        self, service: someip.config.Service, listener: ServerServiceListener
-    ) -> None:
-        if self.task is not None and not self.task.done():  # pragma: nocover
-            self.log.warning("adding services without going through startup phase")
-        self.announcing_services.append((service, listener))
-
-    def stop_announce_service(
+class ServiceInstance:
+    def __init__(
         self,
         service: someip.config.Service,
         listener: ServerServiceListener,
-        send_stop=True,
-    ) -> None:
-        """
-        stops announcing previously started service
+        announcer: ServiceAnnouncer,
+        timings: Timings,
+    ):
+        self.service = service
+        self.listener = listener
+        self.announcer = announcer
+        self.timings = timings
 
-        :param service: service definition of service to be stopped
-        :param listener: listener of service to be stopped
-        :raises ValueError: if the service was not announcing
-        """
-        self.announcing_services.remove((service, listener))
-        if send_stop and self.task is not None and not self.task.done():
-            asyncio.get_event_loop().call_soon(
-                functools.partial(self._send_offers, ((service, listener),), stop=True),
-            )
-
-        self.subscriptions.stop_all_matching(
-            lambda evgr: evgr.service_id == service.service_id
+        self.log = announcer.log.getChild(
+            f"service_{service.service_id:04x}.instance_{service.instance_id:04x}"
         )
 
+        self._can_answer_offers = False
+        self._task: typing.Optional[asyncio.Task[None]] = None
+        self.subscriptions: TimedStore[EventgroupSubscription] = TimedStore(self.log)
+
+    def __repr__(self):
+        return f"<ServiceInstance {self.service}>"
+
+    def start(self, loop=None):
+        if self._task is not None:  # pragma: nocover
+            raise RuntimeError("task already started")
+
+        self._can_answer_offers = False
+        self._task = asyncio.create_task(self._offer_task())
+
+    def stop(self):
+        if self._task is None:  # pragma: nocover
+            raise RuntimeError("task already stopped")
+
+        self._task.cancel()
+        asyncio.create_task(wait_cancelled(self._task))
+        self._task = None
+
+        # cyclic tasks send stop when they are cancelled
+        if not self.timings.CYCLIC_OFFER_DELAY:
+            self._send_offer(stop=True)
+
+        self.subscriptions.stop_all()
+
     @log_exceptions()
-    async def handle_subscribe(
-        self,
-        entry: someip.header.SOMEIPSDEntry,
-        addr: _T_SOCKADDR,
-    ) -> None:
-        subscription = EventgroupSubscription.from_subscribe_entry(entry)
-        if entry.ttl == 0:
-            self.eventgroup_subscribe_stopped(addr, subscription)
-            return
-
-        matching_listeners = [
-            l for s, l in self.announcing_services if s.matches_subscribe(entry) and l
-        ]
-        if not matching_listeners:
+    async def _offer_task(self) -> None:
+        ttl = self.timings.ANNOUNCE_TTL
+        if ttl is not TTL_FOREVER and (
+            not self.timings.CYCLIC_OFFER_DELAY
+            or self.timings.CYCLIC_OFFER_DELAY >= ttl
+        ):
             self.log.warning(
-                "discarding subscribe for unknown service from %s: %s",
-                format_address(addr),
-                entry,
+                "CYCLIC_OFFER_DELAY=%r too long for TTL=%r."
+                " expect connectivity issues",
+                self.timings.CYCLIC_OFFER_DELAY,
+                ttl,
             )
-            self._send_subscribe_nack(subscription, addr)
-            return
-        if len(matching_listeners) > 1:
-            self.log.warning(
-                "multiple configured services match subscribe %s from %s: %s",
-                entry,
-                format_address(addr),
-                matching_listeners,
+        await asyncio.sleep(
+            random.uniform(
+                self.timings.INITIAL_DELAY_MIN, self.timings.INITIAL_DELAY_MAX
             )
-
-        listener = matching_listeners[0]
+        )
+        self._send_offer()
 
         try:
-            self.subscriptions.refresh(
-                subscription.ttl,
-                addr,
-                subscription,
-                listener.client_subscribed,
-                listener.client_unsubscribed,
-            )
-        except NakSubscription:
-            self._send_subscribe_nack(subscription, addr)
-        else:
-            self.sd.send_sd([subscription.to_ack_entry()], remote=addr)
+            self._can_answer_offers = True
+            for i in range(self.timings.REPETITIONS_MAX):
+                await asyncio.sleep((2 ** i) * self.timings.REPETITIONS_BASE_DELAY)
+                self._send_offer()
 
-    def eventgroup_subscribe_stopped(
-        self, addr: _T_SOCKADDR, subscription: EventgroupSubscription
-    ) -> None:
-        self.subscriptions.stop(addr, subscription)
+            if not self.timings.CYCLIC_OFFER_DELAY:  # 4.2.1 SWS_SD_00451
+                return
 
-    def _send_subscribe_nack(
-        self, subscription: EventgroupSubscription, addr: _T_SOCKADDR
-    ) -> None:
-        self.sd.send_sd([subscription.to_nack_entry()], remote=addr)
+            while True:
+                # 4.2.1 SWS_SD_00450
+                await asyncio.sleep(self.timings.CYCLIC_OFFER_DELAY)
+                self._send_offer()
+        except asyncio.CancelledError:
+            self._can_answer_offers = False
+            raise
+        finally:
+            if self.timings.CYCLIC_OFFER_DELAY:
+                self._send_offer(stop=True)
 
-    @log_exceptions()
-    async def handle_findservice(
-        self,
-        entry: someip.header.SOMEIPSDEntry,
-        addr: _T_SOCKADDR,
-        received_over_multicast: bool,
-        unicast_supported: bool,
-    ) -> None:
-        # XXX spec is unclear on RequestResponseDelay behavior if new Find is received
-        self.log.info("received from %s: %s", format_address(addr), entry)
+    def _send_offer(self, remote: _T_OPT_SOCKADDR = None, stop: bool = False) -> None:
+        entry = self.service.create_offer_entry(
+            self.timings.ANNOUNCE_TTL if not stop else 0
+        )
+        self.announcer.queue_send(entry, remote=remote)
+
+    def matches_find(
+        self, entry: someip.header.SOMEIPSDEntry, addr: _T_SOCKADDR
+    ) -> bool:
         if not self._can_answer_offers:
             # 4.2.1 SWS_SD_00319
             self.log.info(
@@ -1195,124 +1185,217 @@ class ServiceAnnouncer:
                 format_address(addr),
                 entry,
             )
-            return
+            return False
 
-        local_services = [
-            s for s in self.announcing_services if s[0].matches_find(entry)
-        ]
-        if not local_services:
-            return
+        return self.service.matches_find(entry)
 
-        # 4.2.1 TR_SOMEIP_00423
-        # unfortunately the spec is unclear on whether the multicast response should
-        # refresh the CYCLIC_OFFER_DELAY timer when the multicast send condition is
-        # fulfilled.
-        # => assume no, since that would only work if all services were sent out
-        time_since_last_offer = (
-            asyncio.get_event_loop().time() - self._last_multicast_offer
-        )
-        answer_with_multicast = (
-            time_since_last_offer > self.timings.CYCLIC_OFFER_DELAY / 2
-            or not unicast_supported
-        )
-
-        # 4.2.1 TR_SOMEIP_00419
-        if received_over_multicast or answer_with_multicast:
-            # 4.2.1 TR_SOMEIP_00420 and TR_SOMEIP_00421
-            await asyncio.sleep(
-                random.uniform(
-                    self.timings.REQUEST_RESPONSE_DELAY_MIN,
-                    self.timings.REQUEST_RESPONSE_DELAY_MAX,
-                )
-            )
-
-        # FIXME spec requires in 4.2.1 SWS_SD_00651 to pack responses to multiple Finds
-        # together
-        if answer_with_multicast:
-            self._send_offers(local_services)
-        else:
-            self._send_offers(local_services, remote=addr)
-
-    def start(self, loop=None):
-        if self.task is not None and not self.task.done():  # pragma: nocover
-            return
-        if loop is None:  # pragma: nobranch
-            loop = asyncio.get_event_loop()
-
-        self._can_answer_offers = False
-        self.task = loop.create_task(self._announce())
-
-    def stop(self):
-        if self.task:  # pragma: nobranch
-            self.task.cancel()
-            asyncio.create_task(wait_cancelled(self.task))
-            self.task = None
-
-            if not self.timings.CYCLIC_OFFER_DELAY:
-                asyncio.get_event_loop().call_soon(
-                    functools.partial(
-                        self._send_offers, self.announcing_services, stop=True
-                    ),
-                )
-
-    def connection_lost(self, exc: typing.Optional[Exception]) -> None:
-        self.stop()
-        self.subscriptions.stop_all()
-
-    @log_exceptions()
-    async def _announce(self) -> None:
-        try:
-            ttl = self.timings.ANNOUNCE_TTL
-            if ttl is not TTL_FOREVER and (
-                not self.timings.CYCLIC_OFFER_DELAY
-                or self.timings.CYCLIC_OFFER_DELAY >= ttl
-            ):
-                self.log.warning(
-                    "CYCLIC_OFFER_DELAY=%r too short for TTL=%r."
-                    " expect connectivity issues",
-                    self.timings.CYCLIC_OFFER_DELAY,
-                    ttl,
-                )
-            await asyncio.sleep(
-                random.uniform(
-                    self.timings.INITIAL_DELAY_MIN, self.timings.INITIAL_DELAY_MAX
-                )
-            )
-            self._send_offers(self.announcing_services)
-
-            try:
-                self._can_answer_offers = True
-                for i in range(self.timings.REPETITIONS_MAX):
-                    await asyncio.sleep((2 ** i) * self.timings.REPETITIONS_BASE_DELAY)
-                    self._send_offers(self.announcing_services)
-
-                if not self.timings.CYCLIC_OFFER_DELAY:  # 4.2.1 SWS_SD_00451
-                    return
-
-                while True:
-                    # 4.2.1 SWS_SD_00450
-                    await asyncio.sleep(self.timings.CYCLIC_OFFER_DELAY)
-                    self._send_offers(self.announcing_services)
-            finally:
-                if self.timings.CYCLIC_OFFER_DELAY:
-                    self._send_offers(self.announcing_services, stop=True)
-        except asyncio.CancelledError:
-            pass
-
-    def _send_offers(
+    def handle_subscribe(
         self,
-        services: typing.Collection[_T_SL],
-        remote: _T_OPT_SOCKADDR = None,
-        stop: bool = False,
-    ):
-        entries = [
-            s.create_offer_entry(self.timings.ANNOUNCE_TTL if not stop else 0)
-            for s, _ in services
-        ]
+        entry: someip.header.SOMEIPSDEntry,
+        addr: _T_SOCKADDR,
+    ) -> bool:
+        if self._task is None:
+            return False
 
-        if not remote:
-            self._last_multicast_offer = asyncio.get_event_loop().time()
-        self.sd.send_sd(entries, remote=remote)
+        if not self.service.matches_subscribe(entry):
+            return False
+
+        subscription = EventgroupSubscription.from_subscribe_entry(entry)
+        if entry.ttl == 0:
+            self.eventgroup_subscribe_stopped(addr, subscription)
+            return True
+
+        try:
+            self.subscriptions.refresh(
+                subscription.ttl,
+                addr,
+                subscription,
+                self.listener.client_subscribed,
+                self.listener.client_unsubscribed,
+            )
+        except NakSubscription:
+            self.announcer._send_subscribe_nack(subscription, addr)
+        else:
+            self.announcer.queue_send(subscription.to_ack_entry(), remote=addr)
+
+        return True
+
+    def eventgroup_subscribe_stopped(
+        self, addr: _T_SOCKADDR, subscription: EventgroupSubscription
+    ) -> None:
+        self.subscriptions.stop(addr, subscription)
 
     def reboot_detected(self, addr: _T_SOCKADDR) -> None:
         self.subscriptions.stop_all_for_address(addr)
+
+
+VT = typing.TypeVar("VT")
+
+
+class SendCollector(typing.Generic[KT]):
+    def __init__(
+        self,
+        timeout: float,
+        callback: typing.Callable[[typing.List[VT]], None],
+        *args,
+        **kwargs,
+    ):
+        self.data: typing.List[VT] = []
+        self.args = args
+        self.kwargs = kwargs
+        self.callback = callback
+
+        self.done = False
+        self._handle = asyncio.get_event_loop().call_later(
+            timeout, self._handle_timeout
+        )
+
+    def _handle_timeout(self) -> None:
+        self.done = True
+        self.callback(self.data, *self.args, **self.kwargs)
+
+    def append(self, datum) -> None:
+        if self.done:
+            raise RuntimeError("tried to append data on an expired SendCollector")
+
+        self.data.append(datum)
+
+    def cancel(self) -> None:
+        self._handle.cancel()
+
+
+class ServiceAnnouncer:
+    # TODO doc
+    def __init__(self, sd: ServiceDiscoveryProtocol):
+        self.sd = sd
+        self.timings = sd.timings
+        self.log = sd.log.getChild("announce")
+
+        self.started = False
+        self.announcing_services: typing.List[ServiceInstance] = []
+        self.send_queues: typing.Dict[
+            _T_OPT_SOCKADDR, SendCollector[someip.header.SOMEIPSDEntry]
+        ] = {}
+
+    def queue_send(
+        self, entry: someip.header.SOMEIPSDEntry, remote: _T_OPT_SOCKADDR = None
+    ) -> None:
+        if self.timings.SEND_COLLECTION_TIMEOUT == 0:
+            self.sd.send_sd([entry], remote=remote)
+            return
+
+        queue = self.send_queues.get(remote)
+        if queue is None or queue.done:
+            self.send_queues[remote] = queue = SendCollector(
+                self.timings.SEND_COLLECTION_TIMEOUT, self.sd.send_sd, remote=remote
+            )
+
+        # FIXME stops and starts for the same instance in the same queue make no sense
+        # and should probably be cleaned out
+        queue.append(entry)
+
+    def announce_service(self, instance: ServiceInstance) -> None:
+        if self.started:
+            instance.start()
+        self.announcing_services.append(instance)
+
+    def stop_announce_service(self, instance: ServiceInstance, send_stop=True) -> None:
+        """
+        stops announcing previously started service
+
+        :param instance: service instance to be stopped
+        :raises ValueError: if the service was not announcing
+        """
+        self.announcing_services.remove(instance)
+        if send_stop and self.started:
+            instance.stop()
+
+    def handle_subscribe(
+        self,
+        entry: someip.header.SOMEIPSDEntry,
+        addr: _T_SOCKADDR,
+    ) -> None:
+
+        matching_services = []
+
+        for instance in self.announcing_services:
+            if instance.handle_subscribe(entry, addr):
+                matching_services.append(instance)
+
+        if not matching_services:
+            self.log.warning(
+                "discarding subscribe for unknown service from %s: %s",
+                format_address(addr),
+                entry,
+            )
+            subscription = EventgroupSubscription.from_subscribe_entry(entry)
+            self._send_subscribe_nack(subscription, addr)
+            return
+
+        if len(matching_services) > 1:
+            self.log.warning(
+                "multiple configured services matched subscribe %s from %s: %s",
+                entry,
+                format_address(addr),
+                matching_services,
+            )
+
+    def _send_subscribe_nack(
+        self, subscription: EventgroupSubscription, addr: _T_SOCKADDR
+    ) -> None:
+        self.queue_send(subscription.to_nack_entry(), remote=addr)
+
+    def handle_findservice(
+        self,
+        entry: someip.header.SOMEIPSDEntry,
+        addr: _T_SOCKADDR,
+        received_over_multicast: bool,
+    ) -> None:
+        self.log.info("received from %s: %s", format_address(addr), entry)
+
+        matching_instances = []
+
+        for instance in self.announcing_services:
+            if instance.matches_find(entry, addr):
+                matching_instances.append(instance)
+
+        if not matching_instances:
+            return
+
+        # R21-11 PRS_SOMEIPSD_00423 not implemented because it's unclear how it should
+        # behave for multiple services with different offer periods
+
+        # R21-11 PRS_SOMEIPSD_00417 and PRS_SOMEIPSD_00419
+        if received_over_multicast:
+            # R21-11 PRS_SOMEIPSD_00420 and PRS_SOMEIPSD_00421
+            delay = random.uniform(
+                self.timings.REQUEST_RESPONSE_DELAY_MIN,
+                self.timings.REQUEST_RESPONSE_DELAY_MAX,
+            )
+
+            def call(func) -> None:
+                asyncio.get_event_loop().call_later(delay, func, addr)
+
+        else:
+            def call(func) -> None:
+                asyncio.get_event_loop().call_soon(func, addr)
+
+        for instance in matching_instances:
+            call(instance._send_offer)
+
+    def start(self, loop=None):
+        for instance in self.announcing_services:
+            instance.start()
+        self.started = True
+
+    def stop(self):
+        for instance in self.announcing_services:
+            instance.stop()
+        self.started = False
+
+    def connection_lost(self, exc: typing.Optional[Exception]) -> None:
+        self.stop()
+
+    def reboot_detected(self, addr: _T_SOCKADDR) -> None:
+        for instance in self.announcing_services:
+            instance.reboot_detected(addr)
