@@ -3,6 +3,7 @@ import asyncio
 import ipaddress
 import itertools
 import logging
+import math
 import os
 import socket
 import struct
@@ -1034,7 +1035,7 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase, _SendTiming):
             INITIAL_DELAY_MAX=ticks(2),
             REPETITIONS_BASE_DELAY=ticks(1),
             REPETITIONS_MAX=3,
-            FIND_TTL=5,
+            FIND_TTL=math.ceil(ticks(25)),
         )
         mock_sd.log = logging.getLogger("someip.sd")
         self._mock_send_sd = mock_sd.send_sd = unittest.mock.Mock()
@@ -1057,7 +1058,7 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase, _SendTiming):
             service_id=0x5566,
             instance_id=0xFFFF,
             major_version=0xFF,
-            ttl=5,
+            ttl=math.ceil(ticks(25)),
             minver_or_counter=0xFFFFFFFF,
         )
 
@@ -1081,7 +1082,7 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase, _SendTiming):
             service_id=0x5566,
             instance_id=0x7788,
             major_version=1,
-            ttl=1,
+            ttl=math.ceil(ticks(5)),
             minver_or_counter=0xDEADBEEF,
             options_1=(
                 hdr.IPv4EndpointOption(
@@ -1110,7 +1111,7 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase, _SendTiming):
             service_id=0x5566,
             instance_id=0x7788,
             major_version=1,
-            ttl=1,
+            ttl=math.ceil(ticks(5)),
             minver_or_counter=0xDEADBEEF,
             options_1=(
                 hdr.IPv4EndpointOption(
@@ -1130,7 +1131,7 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase, _SendTiming):
             service_id=0x5566,
             instance_id=0xFFFF,
             major_version=0xFF,
-            ttl=5,
+            ttl=math.ceil(ticks(25)),
             minver_or_counter=0xFFFFFFFF,
         )
 
@@ -1157,7 +1158,7 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase, _SendTiming):
             service_id=0x4433,
             instance_id=0x7788,
             major_version=1,
-            ttl=int(ticks(10)),
+            ttl=math.ceil(ticks(10)),
             minver_or_counter=0xDEADBEEF,
             options_1=(
                 hdr.IPv4EndpointOption(
@@ -1177,7 +1178,7 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase, _SendTiming):
             service_id=0x5566,
             instance_id=0xFFFF,
             major_version=0xFF,
-            ttl=5,
+            ttl=math.ceil(ticks(25)),
             minver_or_counter=0xFFFFFFFF,
         )
 
@@ -1211,7 +1212,7 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase, _SendTiming):
             service_id=0x5566,
             instance_id=0x7788,
             major_version=1,
-            ttl=ticks(10),
+            ttl=math.ceil(ticks(10)),
             minver_or_counter=0xDEADBEEF,
             options_1=(
                 hdr.IPv4EndpointOption(
@@ -1233,7 +1234,7 @@ class TestSDFind(unittest.IsolatedAsyncioTestCase, _SendTiming):
             service_id=0x5566,
             instance_id=0xFFFF,
             major_version=0xFF,
-            ttl=5,
+            ttl=math.ceil(ticks(25)),
             minver_or_counter=0xFFFFFFFF,
         )
         evgrp = cfg.Eventgroup(
@@ -2075,7 +2076,7 @@ class TestSDSubscriptionTTLForever(_BaseSDSubscriptionTest):
 
 
 class TestSDSubscriptionTTL1(_BaseSDSubscriptionTest):
-    TTL = 1
+    TTL = math.floor(ticks(5))
 
     test_sd_reject_subscription = _BaseSDSubscriptionTest._test_sd_reject_subscription
     test_sd_disconnect = _BaseSDSubscriptionTest._test_sd_disconnect
@@ -2156,7 +2157,7 @@ class TestSDSubscriptionTTL1(_BaseSDSubscriptionTest):
 
         self.reset_mock()
 
-        await asyncio.sleep(1.2)
+        await asyncio.sleep(ticks(5.1))
 
         self.assertEqual(
             self.mock.method_calls,
