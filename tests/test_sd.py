@@ -29,7 +29,7 @@ logging.getLogger("someip").setLevel(logging.WARNING)
 logging.getLogger().addHandler(handler)
 
 
-PRECISION = 0.4 if os.environ.get("CI") == "true" else 0.2  # in seconds
+PRECISION = 0.8 if os.environ.get("CI") == "true" else 0.2  # in seconds
 
 
 def ticks(n):
@@ -1857,7 +1857,7 @@ class _BaseSDSubscriptionTest(unittest.IsolatedAsyncioTestCase):
 
         self.prot.start()
 
-        await asyncio.sleep(ticks(0.03))
+        await asyncio.sleep(ticks(0.1))
         self.reset_mock()
 
         self.prot.handle_subscribe(self.subscribe_5566_3333, self.fake_sd_addr)
@@ -2108,7 +2108,7 @@ class TestSDSubscriptionTTL1(_BaseSDSubscriptionTest):
 
         # wait for timeout of initial service, should not call client_unsubscribed since
         # it was removed by reboot detection
-        await asyncio.sleep(0.8)
+        await asyncio.sleep(1.8)
 
         self.mock.assert_not_called()
 
