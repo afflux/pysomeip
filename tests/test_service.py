@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import ipaddress
+import math
 import os
 import typing
 import unittest
@@ -21,7 +22,7 @@ logging.getLogger("asyncio").setLevel(logging.WARNING)
 logging.getLogger("someip").setLevel(logging.WARNING)
 
 
-PRECISION = 0.4 if os.environ.get("CI") == "true" else 0.2  # in seconds
+PRECISION = 0.8 if os.environ.get("CI") == "true" else 0.2  # in seconds
 
 
 def ticks(n):
@@ -410,7 +411,7 @@ class TestService(unittest.IsolatedAsyncioTestCase):
             major_version=self.prot.version_major,
             id=1,
             counter=0,
-            ttl=ticks(3),
+            ttl=math.ceil(ticks(3)),
             endpoints=frozenset({self.endpoint}),
         )
         self.prot.client_subscribed(sub, self.fake_addr)
@@ -478,7 +479,7 @@ class TestService(unittest.IsolatedAsyncioTestCase):
             major_version=self.prot.version_major,
             id=1,
             counter=0,
-            ttl=ticks(3),
+            ttl=math.ceil(ticks(3)),
             endpoints=frozenset({self.endpoint}),
         )
         self.prot.client_subscribed(sub1, self.fake_addr)
@@ -496,7 +497,7 @@ class TestService(unittest.IsolatedAsyncioTestCase):
             major_version=self.prot.version_major,
             id=1,
             counter=0,
-            ttl=ticks(3),
+            ttl=math.ceil(ticks(3)),
             endpoints=frozenset({endpoint2}),
         )
         self.prot.client_subscribed(sub2, fake_addr2)
@@ -572,7 +573,7 @@ class TestService(unittest.IsolatedAsyncioTestCase):
             major_version=self.prot.version_major,
             id=1,
             counter=0,
-            ttl=ticks(3),
+            ttl=math.ceil(ticks(3)),
             endpoints=frozenset({self.endpoint}),
         )
 
@@ -589,7 +590,7 @@ class TestService(unittest.IsolatedAsyncioTestCase):
             major_version=self.prot.version_major,
             id=1,
             counter=0,
-            ttl=ticks(3),
+            ttl=math.ceil(ticks(3)),
             endpoints=frozenset({self.endpoint}),
         )
 
@@ -612,7 +613,7 @@ class TestService(unittest.IsolatedAsyncioTestCase):
             major_version=self.prot.version_major,
             id=1,
             counter=0,
-            ttl=ticks(3),
+            ttl=math.ceil(ticks(3)),
             endpoints=frozenset({self.endpoint, endpoint2}),
         )
 
@@ -639,7 +640,7 @@ class TestService(unittest.IsolatedAsyncioTestCase):
             major_version=self.prot.version_major,
             id=evgrp.id,
             counter=0,
-            ttl=ticks(3),
+            ttl=math.ceil(ticks(3)),
             endpoints=frozenset({self.endpoint}),
         )
         self.prot.client_subscribed(sub, self.fake_addr)
