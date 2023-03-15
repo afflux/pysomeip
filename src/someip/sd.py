@@ -13,6 +13,7 @@ import socket
 import struct
 import threading
 import typing
+from abc import abstractmethod
 
 import someip.header
 import someip.config
@@ -705,11 +706,13 @@ class ServiceSubscriber:
 
 
 class ClientServiceListener:
+    @abstractmethod
     def service_offered(
         self, service: someip.config.Service, source: _T_SOCKADDR
     ) -> None:
         ...
 
+    @abstractmethod
     def service_stopped(
         self, service: someip.config.Service, source: _T_SOCKADDR
     ) -> None:
@@ -1071,6 +1074,7 @@ class NakSubscription(Exception):  # noqa: N818
 
 
 class ServerServiceListener:
+    @abstractmethod
     def client_subscribed(
         self, subscription: EventgroupSubscription, source: _T_SOCKADDR
     ) -> None:
@@ -1079,6 +1083,7 @@ class ServerServiceListener:
         """
         ...
 
+    @abstractmethod
     def client_unsubscribed(
         self, subscription: EventgroupSubscription, source: _T_SOCKADDR
     ) -> None:
