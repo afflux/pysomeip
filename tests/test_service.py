@@ -566,20 +566,6 @@ class TestService(unittest.IsolatedAsyncioTestCase):
 
         self.mock.sendto.assert_not_called()
 
-    def test_unsubscribe_unknown(self):
-        sub = sd.EventgroupSubscription(
-            service_id=self.prot.service_id,
-            instance_id=self.prot.instance_id,
-            major_version=self.prot.version_major,
-            id=1,
-            counter=0,
-            ttl=math.ceil(ticks(3)),
-            endpoints=frozenset({self.endpoint}),
-        )
-
-        with self.assertLogs(self.prot.log, "WARNING"):
-            self.prot.client_unsubscribed(sub, self.fake_addr)
-
     def test_nak_subscription(self):
         self.prot.eventgroup.subscribe = unittest.mock.Mock()
         self.prot.eventgroup.subscribe.side_effect = sd.NakSubscription

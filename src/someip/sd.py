@@ -532,9 +532,7 @@ class ServiceDiscoveryProtocol(SOMEIPDatagramProtocol):
                 continue
 
             if entry.sd_type == someip.header.SOMEIPSDEntryType.FindService:
-                self.announcer.handle_findservice(
-                    entry, addr, multicast
-                )
+                self.announcer.handle_findservice(entry, addr, multicast)
                 continue
 
             if (  # pragma: nobranch
@@ -745,10 +743,11 @@ class AutoSubscribeServiceListener(ClientServiceListener):
 
 
 KT = typing.TypeVar("KT")
-_T_CALLBACK = typing.Callable[[KT, _T_SOCKADDR], None]
+KR = typing.TypeVar("KR")
+_T_CALLBACK = typing.Callable[[KT, _T_SOCKADDR], KR]
 
 
-class TimedStore(typing.Generic[KT]):
+class TimedStore(typing.Generic[KT, KR]):
     def __init__(self, log):
         self.log = log
         self.store: typing.Dict[
@@ -757,6 +756,7 @@ class TimedStore(typing.Generic[KT]):
                 KT,
                 typing.Tuple[
                     typing.Callable[[KT, _T_SOCKADDR], None],
+                    KR,
                     typing.Optional[asyncio.Handle],
                 ],
             ],
@@ -767,16 +767,16 @@ class TimedStore(typing.Generic[KT]):
         ttl,
         address: _T_SOCKADDR,
         entry: KT,
-        callback_new: _T_CALLBACK[KT],
-        callback_expired: _T_CALLBACK[KT],
-    ) -> None:
+        callback_new: _T_CALLBACK[KT, KR],
+        callback_expired: _T_CALLBACK[KT, None],
+    ) -> KR:
         try:
-            _, old_timeout_handle = self.store[address].pop(entry)
+            _, result, old_timeout_handle = self.store[address].pop(entry)
             if old_timeout_handle:
                 old_timeout_handle.cancel()
         except KeyError:
             # pop failed => new entry
-            callback_new(entry, address)
+            result = callback_new(entry, address)
 
         timeout_handle = None
         if ttl != TTL_FOREVER:
@@ -784,11 +784,12 @@ class TimedStore(typing.Generic[KT]):
                 ttl, self._expired, address, entry
             )
 
-        self.store[address][entry] = (callback_expired, timeout_handle)
+        self.store[address][entry] = (callback_expired, result, timeout_handle)
+        return result
 
     def stop(self, address: _T_SOCKADDR, entry: KT) -> None:
         try:
-            callback, _timeout_handle = self.store[address].pop(entry)
+            callback, _, _timeout_handle = self.store[address].pop(entry)
         except KeyError:
             # race-condition: service was already stopped. don't notify again
             return
@@ -803,7 +804,7 @@ class TimedStore(typing.Generic[KT]):
         callback(entry, address)
 
     def stop_all_for_address(self, address: _T_SOCKADDR) -> None:
-        for entry, (callback, handle) in self.store[address].items():
+        for entry, (callback, _, handle) in self.store[address].items():
             if handle:
                 handle.cancel()
             asyncio.get_event_loop().call_soon(callback, entry, address)
@@ -827,7 +828,7 @@ class TimedStore(typing.Generic[KT]):
 
     def _expired(self, address: _T_SOCKADDR, entry: KT) -> None:
         try:
-            callback, _ = self.store[address].pop(entry)
+            callback, _, _ = self.store[address].pop(entry)
         except KeyError:  # pragma: nocover
             self.log.warning(
                 "race-condition: entry %r timeout was not in store but triggered"
@@ -854,7 +855,9 @@ class ServiceDiscover:
         ] = collections.defaultdict(set)
         self.watcher_all_services: typing.Set[ClientServiceListener] = set()
 
-        self.found_services: TimedStore[someip.config.Service] = TimedStore(self.log)
+        self.found_services: TimedStore[someip.config.Service, None] = TimedStore(
+            self.log
+        )
         self.task: typing.Optional[asyncio.Task[None]] = None
 
     def start(self):
@@ -1030,6 +1033,7 @@ class EventgroupSubscription:
     endpoints: typing.FrozenSet[
         someip.header.EndpointOption[typing.Any]
     ] = dataclasses.field(default_factory=frozenset)
+    multicast: typing.Optional[someip.header.MulticastOption[typing.Any]] = None
     options: typing.Tuple[someip.header.SOMEIPSDOption, ...] = dataclasses.field(
         default_factory=tuple, compare=False
     )
@@ -1038,9 +1042,17 @@ class EventgroupSubscription:
     def from_subscribe_entry(cls, entry: someip.header.SOMEIPSDEntry):
         endpoints = []
         options = []
+        multicast = None
         for option in entry.options:
             if isinstance(option, someip.header.EndpointOption):
                 endpoints.append(option)
+            elif isinstance(option, someip.header.MulticastOption):
+                if multicast is not None:
+                    raise RuntimeError("duplicate multicast option in subscription")
+                if option.l4proto != someip.header.L4Protocols.UDP:
+                    raise RuntimeError("bad L4 protocol on multicast option")
+
+                multicast = option
             else:
                 options.append(option)
 
@@ -1052,10 +1064,11 @@ class EventgroupSubscription:
             counter=entry.eventgroup_counter,
             ttl=entry.ttl,
             endpoints=frozenset(endpoints),
+            multicast=multicast,
             options=tuple(options),
         )
 
-    def to_ack_entry(self):
+    def to_ack_entry(self) -> someip.header.SOMEIPSDEntry:
         return someip.header.SOMEIPSDEntry(
             sd_type=someip.header.SOMEIPSDEntryType.SubscribeAck,
             service_id=self.service_id,
@@ -1065,7 +1078,7 @@ class EventgroupSubscription:
             minver_or_counter=(self.counter << 16) | self.id,
         )
 
-    def to_nack_entry(self):
+    def to_nack_entry(self) -> someip.header.SOMEIPSDEntry:
         return dataclasses.replace(self, ttl=0).to_ack_entry()
 
 
@@ -1077,9 +1090,11 @@ class ServerServiceListener:
     @abstractmethod
     def client_subscribed(
         self, subscription: EventgroupSubscription, source: _T_SOCKADDR
-    ) -> None:
+    ) -> someip.header.SOMEIPSDEntry:
         """
-        should raise someip.sd.NakSubscription if subscription should be rejected
+        should return a SOMEIPSDEntry with SubscribeAck (or NAK by ttl=0)
+
+        can also raise someip.sd.NakSubscription to reject subscription
         """
         ...
 
@@ -1112,7 +1127,9 @@ class ServiceInstance:
 
         self._can_answer_offers = False
         self._task: typing.Optional[asyncio.Task[None]] = None
-        self.subscriptions: TimedStore[EventgroupSubscription] = TimedStore(self.log)
+        self.subscriptions: TimedStore[
+            EventgroupSubscription, someip.header.SOMEIPSDEntry
+        ] = TimedStore(self.log)
 
     def __repr__(self):
         return f"<ServiceInstance {self.service}>"
@@ -1126,7 +1143,7 @@ class ServiceInstance:
 
     def stop(self):
         if self._task is None:  # pragma: nocover
-            raise RuntimeError("task already stopped")
+            return
 
         self._task.cancel()
         asyncio.create_task(wait_cancelled(self._task))
@@ -1215,17 +1232,16 @@ class ServiceInstance:
             return True
 
         try:
-            self.subscriptions.refresh(
+            ack = self.subscriptions.refresh(
                 subscription.ttl,
                 addr,
                 subscription,
                 self.listener.client_subscribed,
                 self.listener.client_unsubscribed,
             )
+            self.announcer.queue_send(ack, remote=addr)
         except NakSubscription:
             self.announcer._send_subscribe_nack(subscription, addr)
-        else:
-            self.announcer.queue_send(subscription.to_ack_entry(), remote=addr)
 
         return True
 

@@ -1841,10 +1841,6 @@ class _BaseSDSubscriptionTest(unittest.IsolatedAsyncioTestCase):
         self.subscription_5566_3333 = sd.EventgroupSubscription.from_subscribe_entry(
             self.subscribe_5566_3333
         )
-        self.ack_5566_3333 = self.subscription_5566_3333.to_ack_entry()
-        self.nack_5566_3333 = self.subscription_5566_3333.to_nack_entry()
-        self.nack_5566_1234 = replace(self.nack_5566_3333, minver_or_counter=0x11234)
-        self.stop_subscribe_5566_3333 = replace(self.subscribe_5566_3333, ttl=0)
 
         self.mock = unittest.mock.Mock()
         self.inst_5566 = sd.ServiceInstance(
@@ -1853,6 +1849,12 @@ class _BaseSDSubscriptionTest(unittest.IsolatedAsyncioTestCase):
         self.inst_5567 = sd.ServiceInstance(
             self.cfg_5567, self.mock._5567, self.prot, mock_sd.timings
         )
+
+        self.ack_5566_3333 = self.mock._5566.client_subscribed()
+        self.nack_5566_3333 = self.subscription_5566_3333.to_nack_entry()
+        self.nack_5566_1234 = replace(self.nack_5566_3333, minver_or_counter=0x11234)
+        self.stop_subscribe_5566_3333 = replace(self.subscribe_5566_3333, ttl=0)
+
         self.prot.announce_service(self.inst_5566)
         self.prot.announce_service(self.inst_5567)
 
