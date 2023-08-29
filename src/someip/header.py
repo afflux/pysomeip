@@ -810,12 +810,14 @@ class AbstractIPOption(SOMEIPSDAbstractOption, typing.Generic[T]):
         """
         addr = await someip.utils.getfirstaddrinfo(
             str(self.address),
-            self.port,
+            None,  # setting the port here fails on QNX 7.1
             family=self._family,
             proto=self.l4proto,
             flags=socket.AI_NUMERICHOST | socket.AI_NUMERICSERV,
         )
-        return typing.cast(_T_SOCKNAME, addr[4])
+        ai_addr = addr[4]
+        addr_with_port = ai_addr[:1] + (self.port,) + ai_addr[2:]
+        return typing.cast(_T_SOCKNAME, addr_with_port)
 
 
 class EndpointOption(AbstractIPOption[T]):
