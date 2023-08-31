@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import platform
 import socket
 import typing
 
@@ -60,13 +61,25 @@ async def getfirstaddrinfo(
         proto = sock.proto
     if loop is None:  # pragma: nobranch
         loop = asyncio.get_event_loop()
+
+    # QNX fails when supplying a numeric port to getaddrinfo
+    # workaround: supply no port and inject it in the results instead
+    # see https://github.com/afflux/pysomeip/issues/13
+    no_port_in_gai = platform.system() == "QNX"
+    lookup_port = None if no_port_in_gai else port
+
     result = await loop.getaddrinfo(
-        host, port, family=family, type=type, proto=proto, flags=flags
+        host, lookup_port, family=family, type=type, proto=proto, flags=flags
     )
+
     if not result:  # pragma: nocover
         raise socket.gaierror(
             socket.EAI_NODATA, f"no address info found for {host}:{port}"
         )
+
+    if no_port_in_gai:  # pragma: nocover
+        result = result[:1] + (port,) + result[2:]
+
     return result[0]
 
 
