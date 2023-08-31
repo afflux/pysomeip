@@ -1,7 +1,7 @@
 [![pypi](https://img.shields.io/pypi/v/someip.svg?style=flat-square)](https://pypi.org/project/someip)
 [![python](https://img.shields.io/pypi/pyversions/someip.svg?style=flat-square)](https://pypi.org/project/someip)
 [![docs](https://img.shields.io/readthedocs/pysomeip?style=flat-square)](https://pysomeip.readthedocs.io)
-[![build](https://img.shields.io/github/workflow/status/afflux/pysomeip/Python%20package?style=flat-square)](https://github.com/afflux/pysomeip/actions?query=workflow%3A%22Python+package%22)
+[![build](https://img.shields.io/github/actions/workflow/status/afflux/pysomeip/pythonpackage.yaml?style=flat-square)](https://github.com/afflux/pysomeip/actions/workflows/pythonpackage.yaml)
 [![coverage](https://img.shields.io/codecov/c/github/afflux/pysomeip?style=flat-square)](https://codecov.io/gh/afflux/pysomeip)
 
 pysomeip
