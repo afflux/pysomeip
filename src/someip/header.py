@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import abc
 import asyncio
 import dataclasses
 import enum
@@ -543,7 +544,7 @@ class SOMEIPSDEntry:
         )
 
 
-class SOMEIPSDOption:
+class SOMEIPSDOption(metaclass=abc.ABCMeta):
     """
     Abstract base class representing SD options
     """
@@ -603,6 +604,7 @@ class SOMEIPSDOption:
         """
         return self.__format.pack(len(buf), type_b) + buf
 
+    @abc.abstractmethod
     def build(self) -> bytes:
         """
         build the byte representation of this option, must be implemented by actual
@@ -649,6 +651,7 @@ class SOMEIPSDAbstractOption(SOMEIPSDOption):
     """
 
     @classmethod
+    @abc.abstractmethod
     def parse_option(cls, buf: bytes) -> SOMEIPSDAbstractOption:
         """
         parses SD option payload in `buf`.
