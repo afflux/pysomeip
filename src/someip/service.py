@@ -1,6 +1,6 @@
 """
-Simple service implementation. Probably lacking a few things, such as multicast
-eventgroups and more than basic option handling.
+Simple service implementation. Probably lacking a few things, such as more than basic
+option handling.
 
 See ``tools/simpleservice.py`` for a basic usage example.
 """
@@ -25,7 +25,7 @@ class MalformedMessageError(Exception):
     pass
 
 
-# TODO implement multicast events
+# TODO implement TCP events
 
 
 class SimpleEventgroup:
@@ -46,8 +46,15 @@ class SimpleEventgroup:
         self.id = id
         self.service = service
         self.log = service.log.getChild(f"evgrp-{id:04x}")
+        self.initial_events = True
 
         self.subscribed_endpoints: typing.Set[header.EndpointOption[typing.Any]] = set()
+        self.subscribed_multicast: typing.DefaultDict[
+            header.MulticastOption[typing.Any], int
+        ] = collections.defaultdict(int)
+        self.force_multicast_endpoint: typing.Optional[
+            header.MulticastOption[typing.Any]
+        ] = None
 
         self.notification_task: typing.Optional[asyncio.Task[None]] = None
         if interval:
@@ -93,11 +100,12 @@ class SimpleEventgroup:
 
     @utils.log_exceptions()
     async def _notify_all(self, events: typing.Iterable[int], label: str):
+        eps = list(self.subscribed_endpoints) + [
+            ep for ep, count in self.subscribed_multicast.items() if count > 0
+        ]
+
         await asyncio.gather(
-            *[
-                self._notify_single(ep, events=events, label=label)
-                for ep in self.subscribed_endpoints
-            ]
+            *[self._notify_single(ep, events=events, label=label) for ep in eps]
         )
 
     def notify_once(self, events: typing.Iterable[int]):
@@ -127,28 +135,104 @@ class SimpleEventgroup:
 
             await self._notify_all(events=self.values.keys(), label="cyclic")
 
-    def subscribe(self, endpoint: header.EndpointOption[typing.Any]) -> None:
+    def subscribe(
+        self, subscription: sd.EventgroupSubscription, source: header._T_SOCKNAME
+    ) -> header.SOMEIPSDEntry:
         """
         Called by :class:`SimpleService` when a new subscription for this eventgroup
         was received.
 
         Triggers a notification of the current value to be sent to the subscriber.
+
+        returns the SubscribeAck to send to the subscriber
         """
-        self.subscribed_endpoints.add(endpoint)
-        self.has_clients.set()
-        # send initial eventgroup notification
-        asyncio.create_task(
-            self._notify_single(endpoint, events=self.values.keys(), label="initial")
+        uc_endpoint, mc_endpoint = self._get_endpoints(subscription, source)
+
+        self.log.info(
+            "client_subscribed from %r: %s for %s / %s",
+            source,
+            subscription,
+            uc_endpoint,
+            mc_endpoint,
         )
 
-    def unsubscribe(self, endpoint: header.EndpointOption[typing.Any]) -> None:
+        # multicast takes precedence over unicast endpoint
+        if mc_endpoint:
+            self.subscribed_multicast[mc_endpoint] += 1
+        else:
+            assert (
+                uc_endpoint  # _get_endpoints ensures either mc_endpoint or uc_endpoint
+            )
+            self.subscribed_endpoints.add(uc_endpoint)
+
+        self.has_clients.set()
+
+        if self.initial_events and uc_endpoint:
+            # send initial eventgroup notification
+            asyncio.create_task(
+                self._notify_single(
+                    uc_endpoint, events=self.values.keys(), label="initial"
+                )
+            )
+
+        ack = subscription.to_ack_entry()
+        if self.force_multicast_endpoint:
+            ack = dataclasses.replace(ack, options_1=(self.force_multicast_endpoint,))
+
+        return ack
+
+    def unsubscribe(
+        self, subscription: sd.EventgroupSubscription, source: header._T_SOCKNAME
+    ) -> None:
         """
         Called by :class:`SimpleService` when a subscription for this eventgroup
         runs out.
         """
-        self.subscribed_endpoints.remove(endpoint)
-        if not self.subscribed_endpoints:
+        uc_endpoint, mc_endpoint = self._get_endpoints(subscription, source)
+
+        self.log.info("client_unsubscribed from %r: %s", source, subscription)
+
+        if mc_endpoint and self.subscribed_multicast[mc_endpoint] > 0:
+            self.subscribed_multicast[mc_endpoint] -= 1
+        else:
+            assert (
+                uc_endpoint  # _get_endpoints ensures either mc_endpoint or uc_endpoint
+            )
+            self.subscribed_endpoints.discard(uc_endpoint)
+
+        if not self.subscribed_endpoints and not any(
+            self.subscribed_multicast.values()
+        ):
             self.has_clients.clear()
+
+    def _get_endpoints(
+        self,
+        subscription: sd.EventgroupSubscription,
+        source: header._T_SOCKNAME,
+        l4proto: header.L4Protocols = header.L4Protocols.UDP,
+    ) -> tuple[
+        typing.Optional[header.EndpointOption[typing.Any]],
+        typing.Optional[header.MulticastOption[typing.Any]],
+    ]:
+        # server-enforced endpoint takes precedence over client-suggested endpoint
+        multicast_ep = self.force_multicast_endpoint or subscription.multicast
+
+        match_proto = [ep for ep in subscription.endpoints if ep.l4proto == l4proto]
+        if len(match_proto) > 1:
+            self.log.error(
+                "client tried to subscribe with too many endpoints from %r:\n%s",
+                source,
+                subscription,
+            )
+            raise sd.NakSubscription
+
+        unicast_ep = match_proto[0] if match_proto else None
+
+        if not unicast_ep and not multicast_ep:
+            self.log.error("got no usable endpoints from %r: %s", source, subscription)
+            raise sd.NakSubscription
+
+        return unicast_ep, multicast_ep
 
 
 class SimpleService(sd.SOMEIPDatagramProtocol, sd.ServerServiceListener):
@@ -355,23 +439,14 @@ class SimpleService(sd.SOMEIPDatagramProtocol, sd.ServerServiceListener):
         self,
         subscription: sd.EventgroupSubscription,
         source: header._T_SOCKNAME,
-    ) -> None:
+    ) -> header.SOMEIPSDEntry:
         try:
             evgrp = self.eventgroups.get(subscription.id)
             assert (
                 evgrp
             ), f"{self}.client_subscribed called with unknown subscription id"
-            if len(subscription.endpoints) != 1:
-                self.log.error(
-                    "client tried to subscribe with multiple endpoints from %r:\n%s",
-                    source,
-                    subscription,
-                )
-                raise sd.NakSubscription
-            self.log.info("client_subscribed from %r: %s", source, subscription)
 
-            ep = next(iter(subscription.endpoints))
-            evgrp.subscribe(ep)
+            return evgrp.subscribe(subscription, source)
         except Exception as exc:
             self.log.exception(
                 "client_subscribed from %r: %s failed", source, subscription
@@ -386,9 +461,9 @@ class SimpleService(sd.SOMEIPDatagramProtocol, sd.ServerServiceListener):
             assert (
                 evgrp
             ), f"{self}.client_unsubscribed called with unknown subscription id"
-            ep = next(iter(subscription.endpoints))
-            evgrp.unsubscribe(ep)
-            self.log.info("client_unsubscribed from %r: %s", source, subscription)
+            evgrp.unsubscribe(subscription, source)
+        except sd.NakSubscription:
+            pass
         except KeyError:
             self.log.warning(
                 "client_unsubscribed unknown from %r: %s", source, subscription
