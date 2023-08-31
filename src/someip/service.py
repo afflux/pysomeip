@@ -211,8 +211,8 @@ class SimpleEventgroup:
         source: header._T_SOCKNAME,
         l4proto: header.L4Protocols = header.L4Protocols.UDP,
     ) -> tuple[
-        header.EndpointOption[typing.Any] | None,
-        header.MulticastOption[typing.Any] | None,
+        typing.Optional[header.EndpointOption[typing.Any]],
+        typing.Optional[header.MulticastOption[typing.Any]],
     ]:
         # server-enforced endpoint takes precedence over client-suggested endpoint
         multicast_ep = self.force_multicast_endpoint or subscription.multicast

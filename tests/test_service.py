@@ -107,6 +107,7 @@ class ExampleService(service.SimpleService):
 
 class TestService(unittest.IsolatedAsyncioTestCase):
     fake_addr = ("2001:db8::2", 30501, 0, 0)
+    fake_multicast = ("ff02::dead:beef", 1234, 0, 0)
 
     async def asyncSetUp(self):  # noqa: N802
         inst = 12
@@ -118,6 +119,12 @@ class TestService(unittest.IsolatedAsyncioTestCase):
             l4proto=hdr.L4Protocols.UDP,
         )
 
+        self.mc_endpoint = hdr.IPv6MulticastOption(
+            ipaddress.IPv6Address(self.fake_multicast[0]),
+            port=self.fake_multicast[1],
+            l4proto=hdr.L4Protocols.UDP,
+        )
+
     def test_start_announce(self):
         sd = unittest.mock.Mock()
         # we don't want to track all the calls to log()
@@ -125,7 +132,7 @@ class TestService(unittest.IsolatedAsyncioTestCase):
         # causing their calls to be tracked on the parent
         object.__setattr__(sd, "log", unittest.mock.Mock())
 
-        ip, port = ("192.0.2.42", 30501)
+        ip, port = ("2001:db8::3", 30501)
 
         def get_extra_info(key):
             assert key == "sockname"
@@ -135,8 +142,8 @@ class TestService(unittest.IsolatedAsyncioTestCase):
 
         self.prot.start_announce(sd)
 
-        ep = hdr.IPv4EndpointOption(
-            ipaddress.IPv4Address(ip),
+        ep = hdr.IPv6EndpointOption(
+            ipaddress.IPv6Address(ip),
             port=port,
             l4proto=hdr.L4Protocols.UDP,
         )
@@ -404,17 +411,8 @@ class TestService(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(KeyError):
             self.prot.register_eventgroup(service.SimpleEventgroup(self.prot, id=1))
 
-    async def test_subscribe_eventgroup(self):
-        sub = sd.EventgroupSubscription(
-            service_id=self.prot.service_id,
-            instance_id=self.prot.instance_id,
-            major_version=self.prot.version_major,
-            id=1,
-            counter=0,
-            ttl=math.ceil(ticks(3)),
-            endpoints=frozenset({self.endpoint}),
-        )
-        self.prot.client_subscribed(sub, self.fake_addr)
+    async def _test_subscribe(self, subscription, expect_initial, expect_destination):
+        self.prot.client_subscribed(subscription, self.fake_addr)
 
         notification = hdr.SOMEIPHeader(
             service_id=self.prot.service_id,
@@ -425,29 +423,34 @@ class TestService(unittest.IsolatedAsyncioTestCase):
             message_type=hdr.SOMEIPMessageType.NOTIFICATION,
         )
 
-        # notification after subscribe
-        await asyncio.sleep(ticks(0.1))
-        self.mock.sendto.assert_called_once_with(
-            replace(
-                notification,
-                session_id=1,
-                payload=b"\0\0",
-            ).build(),
-            self.fake_addr,
-        )
-        self.mock.reset_mock()
+        session_id = 1
+
+        if expect_initial:
+            # notification after subscribe
+            await asyncio.sleep(ticks(0.1))
+            self.mock.sendto.assert_called_once_with(
+                replace(
+                    notification,
+                    session_id=session_id,
+                    payload=b"\0\0",
+                ).build(),
+                expect_destination,
+            )
+            self.mock.reset_mock()
+            session_id += 1
 
         # cyclic notification
         await asyncio.sleep(ticks(1.1))
         self.mock.sendto.assert_called_once_with(
             replace(
                 notification,
-                session_id=2,
+                session_id=session_id,
                 payload=b"\0\0",
             ).build(),
-            self.fake_addr,
+            expect_destination,
         )
         self.mock.reset_mock()
+        session_id += 1
 
         inc = hdr.SOMEIPHeader(
             service_id=self.prot.service_id,
@@ -458,19 +461,33 @@ class TestService(unittest.IsolatedAsyncioTestCase):
             interface_version=self.prot.version_major,
             message_type=hdr.SOMEIPMessageType.REQUEST_NO_RETURN,
         )
-        self.prot.message_received(inc, self.fake_addr, False)
+        self.prot.message_received(inc, self.fake_addr, multicast=False)
 
         # cyclic notification
         await asyncio.sleep(ticks(1.1))
         self.mock.sendto.assert_called_once_with(
             replace(
                 notification,
-                session_id=3,
+                session_id=session_id,
                 payload=b"\0\1",
             ).build(),
-            self.fake_addr,
+            expect_destination,
         )
         self.mock.reset_mock()
+
+    async def test_subscribe_eventgroup(self):
+        sub = sd.EventgroupSubscription(
+            service_id=self.prot.service_id,
+            instance_id=self.prot.instance_id,
+            major_version=self.prot.version_major,
+            id=1,
+            counter=0,
+            ttl=math.ceil(ticks(3)),
+            endpoints=frozenset({self.endpoint}),
+        )
+        await self._test_subscribe(
+            sub, expect_initial=True, expect_destination=self.fake_addr
+        )
 
     async def test_subscribe_eventgroup_two_clients(self):
         sub1 = sd.EventgroupSubscription(
@@ -649,3 +666,53 @@ class TestService(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(ticks(1.1))
 
         self.prot.send.assert_not_called()
+
+    async def test_subscribe_multicast(self):
+        sub = sd.EventgroupSubscription(
+            service_id=self.prot.service_id,
+            instance_id=self.prot.instance_id,
+            major_version=self.prot.version_major,
+            id=1,
+            counter=0,
+            ttl=math.ceil(ticks(3)),
+            multicast=self.mc_endpoint,
+        )
+
+        fake_addr2 = ("192.0.2.42", 30501)
+        self.prot.client_subscribed(sub, fake_addr2)
+
+        asyncio.get_running_loop().call_later(
+            ticks(1.1),
+            self.prot.client_unsubscribed,
+            sub,
+            self.fake_addr,
+        )
+
+        # two subscribers => one notification
+        # one subscriber gone => one notification
+        await self._test_subscribe(
+            sub, expect_initial=False, expect_destination=self.fake_multicast
+        )
+
+        # second subscriber gone => no notification anymore
+        self.prot.client_unsubscribed(sub, fake_addr2)
+
+        await asyncio.sleep(ticks(1.1))
+        self.mock.sendto.assert_not_called()
+
+    async def test_subscribe_forced_multicast(self):
+        self.prot.eventgroup.force_multicast_endpoint = self.mc_endpoint
+
+        sub = sd.EventgroupSubscription(
+            service_id=self.prot.service_id,
+            instance_id=self.prot.instance_id,
+            major_version=self.prot.version_major,
+            id=1,
+            counter=0,
+            ttl=math.ceil(ticks(3)),
+            # ignored due to force endpoint above:
+            multicast=replace(self.mc_endpoint, port=9999),
+        )
+        await self._test_subscribe(
+            sub, expect_initial=False, expect_destination=self.fake_multicast
+        )
