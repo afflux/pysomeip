@@ -11,6 +11,7 @@ import sys
 import typing
 import unittest
 import unittest.mock
+from collections import namedtuple
 from dataclasses import replace
 
 import someip.header as hdr
@@ -120,31 +121,69 @@ async def settle():
 # }}}
 
 
+EndPointParam = namedtuple("EndPointParam", "datas, expected, id")
+
+params = (
+    EndPointParam(
+        datas=(b"\xde\xad\xbe\xef\x00\x00\x00\x08\xcc\xcc\xdd\xdd\x01\x02\x40\x04",),
+        expected=hdr.SOMEIPHeader(
+            service_id=0xDEAD,
+            method_id=0xBEEF,
+            client_id=0xCCCC,
+            session_id=0xDDDD,
+            protocol_version=1,
+            interface_version=2,
+            message_type=hdr.SOMEIPMessageType.REQUEST_ACK,
+            return_code=hdr.SOMEIPReturnCode.E_NOT_READY,
+        ),
+        id="someip",
+    ),
+    EndPointParam(
+        datas=(
+            (
+                b"\xde\xad\xbe\xef"
+                b"\x00\x00\x05\x7c"
+                b"\xcc\xcc\xdd\xdd"
+                b"\x01\x02\x20\x04"
+                b"\x00\x00\x00\x01"
+            ) + b"\x00" * 1392,
+            (
+                b"\xde\xad\xbe\xef"
+                b"\x00\x00\x01\x44"
+                b"\xcc\xcc\xdd\xdd"
+                b"\x01\x02\x20\x04"
+                b"\x00\x00\x05\x70"
+            ) + b"\x00" * 312,
+        ),
+        expected=hdr.SOMEIPHeader(
+            service_id=0xDEAD,
+            method_id=0xBEEF,
+            client_id=0xCCCC,
+            session_id=0xDDDD,
+            protocol_version=1,
+            interface_version=2,
+            message_type=hdr.SOMEIPMessageType.REQUEST,
+            return_code=hdr.SOMEIPReturnCode.E_NOT_READY,
+            payload=bytes(1704),
+        ),
+        id="someip_tp",
+    ),
+)
+
+
 class TestSD(unittest.IsolatedAsyncioTestCase):
     multi_addr = ("2001:db8::1", 30490, 0, 0)
     fake_addr = ("2001:db8::2", 30490, 0, 0)
 
-    async def _test_endpoint(self, family, host):
+    async def _test_endpoint(self, family, host, datas, expected):
         sock = None
         trsp, prot = await sd.SOMEIPDatagramProtocol.create_unicast_endpoint(
             local_addr=(host, 0),
         )
         try:
             prot.message_received = unittest.mock.Mock()
+            prot.send = unittest.mock.Mock()
             local_sockname = trsp.get_extra_info("sockname")
-
-            message = hdr.SOMEIPHeader(
-                service_id=0xDEAD,
-                method_id=0xBEEF,
-                client_id=0xCCCC,
-                session_id=0xDDDD,
-                protocol_version=1,
-                interface_version=2,
-                message_type=hdr.SOMEIPMessageType.REQUEST_ACK,
-                return_code=hdr.SOMEIPReturnCode.E_NOT_READY,
-            )
-            data = b"\xde\xad\xbe\xef\x00\x00\x00\x08\xcc\xcc\xdd\xdd\x01\x02\x40\x04"
-
             sock = socket.socket(family, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
             addrs = await asyncio.get_event_loop().getaddrinfo(
                 host,
@@ -157,14 +196,20 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
             bind_addr = addrs[0][4]
             sock.bind(bind_addr)
 
-            sock.sendto(data, local_sockname)
+            for data in datas:
+                sock.sendto(data, local_sockname)
+
             sender_sockname = sock.getsockname()
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(1)
             prot.message_received.assert_called_once_with(
-                message, sender_sockname, False
+                expected, sender_sockname, False
             )
 
             prot.message_received.reset_mock()
+
+            prot.send_msg(expected)
+            for call_args, data in zip(prot.send.call_args_list, datas):
+                assert call_args[0][0] == data
 
             data = b"\xde\xad\xbe\xef\x00\x00\x00\x08\xcc\xcc\xdd\xdd\x00\x02\x40\x04"
             sock.sendto(data, local_sockname)
@@ -178,10 +223,18 @@ class TestSD(unittest.IsolatedAsyncioTestCase):
             trsp.close()
 
     async def test_endpoint_v6(self):
-        await self._test_endpoint(socket.AF_INET6, "::1")
+        for data, expected, msg in params:
+            with self.subTest(msg=msg):
+                await self._test_endpoint(
+                    socket.AF_INET6, "::1", data, expected
+                )
 
     async def test_endpoint_v4(self):
-        await self._test_endpoint(socket.AF_INET, "127.0.0.1")
+        for data, expected, msg in params:
+            with self.subTest(msg=msg):
+                await self._test_endpoint(
+                    socket.AF_INET, "127.0.0.1", data, expected
+                )
 
     async def test_send_session_id(self):
         entry = cfg.Service(service_id=0x1234).create_find_entry()
