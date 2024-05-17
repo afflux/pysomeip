@@ -14,6 +14,8 @@ try:
 except ImportError:  # pragma: nocover
     cached_property = property  # type: ignore[misc,assignment]
 
+import bitstruct
+
 import someip.utils
 
 
@@ -24,6 +26,8 @@ _T_SOCKNAME = typing.Union[typing.Tuple[str, int], typing.Tuple[str, int, int, i
 SD_SERVICE = 0xFFFF
 SD_METHOD = 0x8100
 SD_INTERFACE_VERSION = 1
+TP_FLAG = 0x20
+MAX_PAYLOAD_SIZE = 1400
 
 
 class ParseError(RuntimeError):
@@ -38,11 +42,16 @@ class SOMEIPMessageType(enum.IntEnum):
     REQUEST = 0
     REQUEST_NO_RETURN = 1
     NOTIFICATION = 2
+    TP_REQUEST = 0x20
+    TP_REQUEST_NO_RETURN = 0x21
+    TP_NOTIFICATION = 0x22
     REQUEST_ACK = 0x40
     REQUEST_NO_RETURN_ACK = 0x41
     NOTIFICATION_ACK = 0x42
     RESPONSE = 0x80
     ERROR = 0x81
+    TP_RESPONSE = 0xA0
+    TP_ERROR = 0xA1
     RESPONSE_ACK = 0xC0
     ERROR_ACK = 0xC1
 
@@ -59,6 +68,20 @@ class SOMEIPReturnCode(enum.IntEnum):
     E_WRONG_INTERFACE_VERSION = 8
     E_MALFORMED_MESSAGE = 9
     E_WRONG_MESSAGE_TYPE = 10
+
+
+class StructLikeBitstruct:
+    """
+    A wrapper around `bitstruct.compile` that provides a similar interface to struct.
+    """
+
+    def __init__(self, fmt: str):
+        self._compiled = bitstruct.compile(fmt)
+        self.format = fmt
+        self.size = self._compiled.calcsize() // 8
+
+    def __getattr__(self, item):
+        return getattr(self._compiled, item)
 
 
 def _unpack(fmt, buf):
@@ -208,6 +231,176 @@ payload: {len(self.payload)} bytes"""
             self.return_code.value,
         )
         return hdr + self.payload
+
+
+@dataclasses.dataclass(frozen=True)
+class SOMEIPTPHeader(SOMEIPHeader):
+    """Represents a top-level SOME/IP TP packet (header and payload)."""
+
+    __format: typing.ClassVar[struct.Struct] = struct.Struct("!HHIHHBBBB")
+    TP_STRUCT: typing.ClassVar[StructLikeBitstruct] = StructLikeBitstruct("u28p3b1")
+
+    offset: int = 0
+    more_segments: bool = False
+
+    @property
+    def description(self):  # pragma: nocover
+        return (
+            f"service: 0x{self.service_id:04x}"
+            f"method: 0x{self.method_id:04x}"
+            f"client: 0x{self.client_id:04x}"
+            f"session: 0x{self.session_id:04x}"
+            f"protocol: {self.protocol_version}"
+            f"interface: 0x{self.interface_version:02x}"
+            f"message: {self.message_type.name}"
+            f"return code: {self.return_code.name}"
+            f"offset: {self.offset}"
+            f"more segments: {self.more_segments}"
+            f"payload: {len(self.payload)} bytes"
+        )
+
+    def __str__(self):  # pragma: nocover
+        return (
+            f"service=0x{self.service_id:04x}, "
+            f"method=0x{self.method_id:04x}, "
+            f"client=0x{self.client_id:04x}, "
+            f"session=0x{self.session_id:04x}, "
+            f"protocol={self.protocol_version}, "
+            f"interface=0x{self.interface_version:02x}, "
+            f"message={self.message_type.name}, "
+            f"return_code={self.return_code.name}, "
+            f"offset={self.offset}, "
+            f"more_segments={self.more_segments}, "
+            f"payload: {len(self.payload)}"
+        )
+
+    @classmethod
+    def _build_from_buffer(
+        cls,
+        buf: bytes,
+        size: int,
+        builder: typing.Callable[[bytes, int, bool], SOMEIPTPHeader],
+    ) -> typing.Tuple[SOMEIPTPHeader, bytes]:
+        """Helper function to build a SOMEIP packet from a buffer.
+
+        :param buf: buffer in which the payload is located.
+        :param size: size of the SOME/IP packet.
+        :param builder: callable to build the header from the payload
+        :return: tuple of :class:`SOMEIPTPHeader` instance and unparsed rest of `buf`.
+        """
+        tp_args, buf = _unpack(cls.TP_STRUCT, buf)
+        payload_len = size - (8 + cls.TP_STRUCT.size)
+        payload_b, buf = buf[: payload_len], buf[payload_len:]
+        header = builder(payload_b, *tp_args)
+        return header, buf
+
+    @classmethod
+    def _parse_header(
+        cls, parsed
+    ) -> typing.Tuple[int, typing.Callable[[bytes, int, bool], SOMEIPTPHeader]]:
+        """Validate the header fields from `parsed` tuple.
+
+        :param parsed: tuple of parsed header fields.
+        :return: Return the size of the whole SOMEIP packet and a builder function to
+            create a :class:`SOMEIPTPHeader` instance from the payload.
+        """
+        sid, mid, size, cid, sessid, pv, iv, mt_b, rc_b = parsed
+        if pv != 1:
+            raise ParseError(f"bad someip protocol version 0x{pv:02x}, expected 0x01")
+
+        try:
+            if not (mt_b & TP_FLAG):
+                raise ValueError("TP flag not set in SOMEIP message type")
+
+            mt = SOMEIPMessageType(mt_b)
+        except ValueError as exc:
+            raise ParseError(f"bad someip message type {mt_b:#x}") from exc
+
+        try:
+            rc = SOMEIPReturnCode(rc_b)
+        except ValueError as exc:
+            raise ParseError(f"bad someip return code {rc_b:#x}") from exc
+
+        if size < 8:
+            raise ParseError("SOMEIP length must be at least 8")
+
+        return (
+            size,
+            lambda payload_b, offset=0, more_segments=False: cls(
+                service_id=sid,
+                method_id=mid,
+                client_id=cid,
+                session_id=sessid,
+                protocol_version=pv,
+                interface_version=iv,
+                message_type=mt,
+                return_code=rc,
+                offset=offset,
+                more_segments=more_segments,
+                payload=payload_b,
+            ),
+        )
+
+    @classmethod
+    def parse(cls, buf: bytes) -> typing.Tuple[SOMEIPTPHeader, bytes]:
+        """Parse SOME/IP packet in `buf`.
+
+        :param buf: buffer containing SOME/IP packet.
+        :raises IncompleteReadError: if the buffer did not contain enough data to unpack
+            the SOMEIP packet. Either there was less data than one SOMEIP header length,
+            or the size in the header was too big
+        :raises ParseError: if the packet contained invalid data, such as an unknown
+            message type or return code
+        :return: tuple (S, B) where S is the parsed :class:`SOMEIPTPHeader` instance
+            and B is the unparsed rest of `buf`.
+        """
+        parsed, buf_rest = _unpack(cls.__format, buf)
+        size, builder = cls._parse_header(parsed)
+        if len(buf_rest) < size - 8:
+            raise IncompleteReadError(
+                f"packet too short, expected {size+4}, got {len(buf)}"
+            )
+
+        header, buf_rest = cls._build_from_buffer(buf_rest, size, builder)
+        return header, buf_rest
+
+    def build(self) -> bytes:
+        """Build the byte representation of this SOMEIP packet.
+
+        :raises struct.error: if any attribute was out of range for serialization
+        :return: the byte representation
+        """
+        size = len(self.payload) + 8 + self.TP_STRUCT.size
+        tp_hdr = self.TP_STRUCT.pack(self.offset, self.more_segments)
+
+        hdr = self.__format.pack(
+            self.service_id,
+            self.method_id,
+            size,
+            self.client_id,
+            self.session_id,
+            self.protocol_version,
+            self.interface_version,
+            self.message_type.value,
+            self.return_code.value,
+        )
+        return hdr + tp_hdr + self.payload
+
+
+def header_parser(
+    buf: bytes,
+) -> typing.Tuple[typing.Union[SOMEIPHeader, SOMEIPTPHeader], bytes]:
+    """
+    Parse data and return either `SOMEIPHeader` or `SOMEIPTPHeader` and the rest of
+    the buffer.
+
+    :param buf: Buffer containing SOME/IP or SOME/IP TP packet.
+    :return: tuple of parsed header and unparsed buffer.
+    """
+    try:
+        return SOMEIPTPHeader.parse(buf)
+    except ParseError:
+        return SOMEIPHeader.parse(buf)
 
 
 class SOMEIPReader:

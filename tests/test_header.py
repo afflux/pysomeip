@@ -110,6 +110,163 @@ class TestHeader(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(hdr.ParseError):
             hdr.SOMEIPHeader.parse(payload)
 
+    def test_someiptp_no_payload(self):
+        """Test parsing of a SOME/IP-TP message without payload."""
+        payload = (
+            b"\xde\xad\xbe\xef"
+            b"\x00\x00\x00\x0c"
+            b"\xcc\xcc\xdd\xdd"
+            b"\x01\x02\x20\x04"
+            b"\x00\x00\x05\x71"
+        )
+        message = hdr.SOMEIPTPHeader(
+            service_id=0xDEAD,
+            method_id=0xBEEF,
+            client_id=0xCCCC,
+            session_id=0xDDDD,
+            protocol_version=1,
+            interface_version=2,
+            message_type=hdr.SOMEIPMessageType.TP_REQUEST,
+            return_code=hdr.SOMEIPReturnCode.E_NOT_READY,
+            offset=87,
+            more_segments=True,
+        )
+        self._check(payload, message, hdr.SOMEIPTPHeader.parse)
+
+    def test_someiptp_no_payload_rest(self):
+        """Test parsing of a SOME/IP-TP message without payload and extra data."""
+        payload = (
+            b"\xde\xad\xbe\xef"
+            b"\x00\x00\x00\x0c"
+            b"\xcc\xcc\xdd\xdd"
+            b"\x01\x02\x20\x04"
+            b"\x00\x00\x05\x71"
+        )
+        message = hdr.SOMEIPTPHeader(
+            service_id=0xDEAD,
+            method_id=0xBEEF,
+            client_id=0xCCCC,
+            session_id=0xDDDD,
+            protocol_version=1,
+            interface_version=2,
+            message_type=hdr.SOMEIPMessageType.TP_REQUEST,
+            return_code=hdr.SOMEIPReturnCode.E_NOT_READY,
+            offset=87,
+            more_segments=True,
+        )
+        self._check(payload, message, hdr.SOMEIPTPHeader.parse, extra=b"\1\2\3\4")
+        self._check(payload, message, hdr.SOMEIPTPHeader.parse, extra=payload)
+
+    def test_someiptp_with_payload(self):
+        """Test parsing of a SOME/IP-TP message with payload."""
+        payload = (
+            b"\xde\xad\xbe\xef"
+            b"\x00\x00\x00\x0e"
+            b"\xcc\xcc\xdd\xdd"
+            b"\x01\x02\x20\x04"
+            b"\x00\x00\x05\x71"
+            b"\xaa\x55"
+        )
+        message = hdr.SOMEIPTPHeader(
+            service_id=0xDEAD,
+            method_id=0xBEEF,
+            client_id=0xCCCC,
+            session_id=0xDDDD,
+            protocol_version=1,
+            interface_version=2,
+            message_type=hdr.SOMEIPMessageType.TP_REQUEST,
+            return_code=hdr.SOMEIPReturnCode.E_NOT_READY,
+            offset=87,
+            more_segments=True,
+            payload=b"\xaa\x55",
+        )
+        self._check(payload, message, hdr.SOMEIPTPHeader.parse)
+
+    def test_someiptp_with_payload_rest(self):
+        """Test parsing of a SOME/IP-TP message with payload and extra data."""
+        payload = (
+            b"\xde\xad\xbe\xef"
+            b"\x00\x00\x00\x0e"
+            b"\xcc\xcc\xdd\xdd"
+            b"\x01\x02\x20\x04"
+            b"\x00\x00\x05\x71"
+            b"\xaa\x55"
+        )
+        message = hdr.SOMEIPTPHeader(
+            service_id=0xDEAD,
+            method_id=0xBEEF,
+            client_id=0xCCCC,
+            session_id=0xDDDD,
+            protocol_version=1,
+            interface_version=2,
+            message_type=hdr.SOMEIPMessageType.TP_REQUEST,
+            return_code=hdr.SOMEIPReturnCode.E_NOT_READY,
+            offset=87,
+            more_segments=True,
+            payload=b"\xaa\x55",
+        )
+        self._check(payload, message, hdr.SOMEIPTPHeader.parse, extra=b"\1\2\3\4")
+
+    def test_someiptp_raises_parser_error(self):
+        """Test parsing SOME/IP-TP message raises a ParseError."""
+        params = [
+            (
+                (
+                    b"\xde\xad\xbe\xef"
+                    b"\x00\x00\x00\x0c"
+                    b"\xcc\xcc\xdd\xdd"
+                    b"\x01\x02\x20\x04"
+                    b"\x00\x00\x05"
+                ),
+                "short",
+            ),
+            (
+                (
+                    b"\xde\xad\xbe\xef"
+                    b"\x00\x00\x00\x0c"
+                    b"\xcc\xcc\xdd\xdd"
+                    b"\x00\x02\x20\x04"
+                    b"\x00\x00\x05\x71"
+                ),
+                "bad_version",
+            ),
+            (
+                (
+                    b"\xde\xad\xbe\xef"
+                    b"\x00\x00\x00\x0c"
+                    b"\xcc\xcc\xdd\xdd"
+                    b"\x00\x02\x40\x04"
+                    b"\x00\x00\x05\x71"
+                ),
+                "bad_message_type",
+            ),
+            (
+                (
+                    b"\xde\xad\xbe\xef"
+                    b"\x00\x00\x00\x0c"
+                    b"\xcc\xcc\xdd\xdd"
+                    b"\x00\x02\x20\xaa"
+                    b"\x00\x00\x05\x71"
+                ),
+                "bad_return_code",
+            ),
+            (
+                (
+                    b"\xde\xad\xbe\xef"
+                    b"\x00\x00\x00\x0d"
+                    b"\xcc\xcc\xdd\xdd"
+                    b"\x00\x02\x20\xaa"
+                    b"\x00\x00\x05\x71"
+                ),
+                "bad_length",
+            ),
+        ]
+
+        for payload, msg in params:
+            with self.subTest(msg=msg):
+                with self.assertRaises(hdr.ParseError):
+                    hdr.SOMEIPTPHeader.parse(payload)
+
     async def test_someip_stream_async(self):
         bytes_reader = asyncio.StreamReader()
         someip_reader = hdr.SOMEIPReader(bytes_reader)

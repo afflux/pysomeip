@@ -17,6 +17,7 @@ import typing
 import someip.header
 import someip.config
 from someip.config import _T_SOCKNAME as _T_SOCKADDR
+from someip.header import MAX_PAYLOAD_SIZE, SOMEIPTPHeader, TP_FLAG, header_parser
 from someip.utils import log_exceptions, wait_cancelled
 
 LOG = logging.getLogger("someip.sd")
@@ -47,6 +48,39 @@ def format_address(addr: _T_SOCKADDR) -> str:
         return f"[{ip!s}]:{port:s}"
     else:  # pragma: nocover
         raise NotImplementedError(f"unknown ip address format: {addr!r} -> {ip!r}")
+
+
+def segment_msg(
+    msg: someip.header.SOMEIPHeader,
+    max_payload_size: int = MAX_PAYLOAD_SIZE,
+) -> typing.Iterator[SOMEIPTPHeader]:
+    """Split a SOME/IP message into multiple SOME/IP-TP messages."""
+    bytes_sent = 0
+    offset = 0
+    max_len = (max_payload_size - SOMEIPTPHeader.TP_STRUCT.size) // 16 * 16
+    message_type = someip.header.SOMEIPMessageType(msg.message_type.value | TP_FLAG)
+    data = msg.payload
+    original_payload_len = len(data)
+    while data:
+        payload, data = data[:max_len], data[max_len:]
+        bytes_sent = bytes_sent + len(payload)
+        more_segments = bytes_sent < original_payload_len
+
+        yield SOMEIPTPHeader(
+            service_id=msg.service_id,
+            method_id=msg.method_id,
+            client_id=msg.client_id,
+            session_id=msg.session_id,
+            interface_version=msg.interface_version,
+            message_type=message_type,
+            protocol_version=msg.protocol_version,
+            return_code=msg.return_code,
+            offset=offset,
+            more_segments=more_segments,
+            payload=payload,
+        )
+
+        offset = bytes_sent // 16
 
 
 class SOMEIPDatagramProtocol:
@@ -85,13 +119,70 @@ class SOMEIPDatagramProtocol:
         # default_addr=None means use connected address from socket
         self.default_addr: _T_OPT_SOCKADDR = None
 
+        # Dict that keeps track of dict of kwargs of SOME/IP messages currently being
+        # assembled keyed by PDU ID (i.e. a tuple of service_id and method_id).
+        self._tp_buffer: typing.Dict[
+            typing.Tuple[int, int], typing.Dict[str, typing.Any]
+        ] = {}
+
+    def _assemble_msg(
+        self, segment: SOMEIPTPHeader,
+    ) -> typing.Union[None, someip.header.SOMEIPHeader]:
+        """Assemble SOME/IP message from SOME/IP TP messages.
+
+        :param segment: The SOME/IP TP message to process.
+        :return: The assembled SOME/IP message if all segments were received, None
+             otherwise.
+        """
+        header = None
+        pdu_id = segment.service_id, segment.method_id
+        if segment.offset == 0:
+            message_type = someip.header.SOMEIPMessageType(
+                segment.message_type.value & ~TP_FLAG
+            )
+            self._tp_buffer[pdu_id] = {
+                "service_id": segment.service_id,
+                "method_id": segment.method_id,
+                "client_id": segment.client_id,
+                "session_id": segment.session_id,
+                "interface_version": segment.interface_version,
+                "message_type": message_type,
+                "protocol_version": segment.protocol_version,
+                "return_code": segment.return_code,
+                "payload": segment.payload,
+            }
+        elif segment.offset > 0:
+            wip = self._tp_buffer.get(pdu_id)
+            if wip is not None:
+                current_offset = len(wip["payload"]) / 16
+                if segment.offset == current_offset:
+                    wip["payload"] = wip["payload"] + segment.payload
+                    if not segment.more_segments:
+                        del self._tp_buffer[pdu_id]
+                        header = someip.header.SOMEIPHeader(**wip)
+                else:
+                    self.log.error(
+                        "Received TP segment with wrong offset: %s", segment
+                    )
+            else:
+                self.log.error(
+                    "Received TP segment without first segment: %s", segment
+                )
+
+        return header
+
     def datagram_received(self, data, addr: _T_SOCKADDR, multicast: bool) -> None:
         try:
             while data:
                 # 4.2.1, TR_SOMEIP_00140 more than one SOMEIP message per UDP frame
                 # allowed
-                parsed, data = someip.header.SOMEIPHeader.parse(data)
-                self.message_received(parsed, addr, multicast)
+                parsed, data = header_parser(data)
+                if isinstance(parsed, SOMEIPTPHeader):
+                    parsed = self._assemble_msg(parsed)
+                    if parsed:
+                        self.message_received(parsed, addr, multicast)
+                else:
+                    self.message_received(parsed, addr, multicast)
         except someip.header.ParseError as exc:
             self.log.error(
                 "failed to parse SOME/IP datagram from %s: %r",
@@ -134,6 +225,14 @@ class SOMEIPDatagramProtocol:
         if not remote:
             remote = self.default_addr
         self.transport.sendto(buf, remote)
+
+    def send_msg(self, msg: someip.header.SOMEIPHeader, remote: _T_OPT_SOCKADDR = None):
+        """Send a SOME/IP message or split it into multiple SOME/IP-TP messages."""
+        if len(msg.payload) <= MAX_PAYLOAD_SIZE:
+            self.send(msg.build(), remote)
+        else:
+            for msg in segment_msg(msg):
+                self.send(msg.build(), remote)
 
 
 class DatagramProtocolAdapter(asyncio.DatagramProtocol):
