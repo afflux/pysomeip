@@ -244,10 +244,7 @@ class ServiceDiscoveryProtocol(SOMEIPDatagramProtocol):
             if multicast_addr:
                 bind_addr = None
                 if platform.system() == "Linux":  # pragma: nocover
-                    if family == socket.AF_INET or "%" in multicast_addr:
-                        bind_addr = multicast_addr
-                    else:
-                        bind_addr = f"{multicast_addr}%{multicast_interface}"
+                    bind_addr = multicast_addr
             # wrong type in asyncio typeshed, should be optional
             bind_addr = typing.cast(str, bind_addr)
 
