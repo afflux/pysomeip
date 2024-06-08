@@ -85,7 +85,7 @@ def auto_int(s):
 
 def setup_log(fmt="", **kwargs):
     try:
-        import coloredlogs  # type: ignore[import]
+        import coloredlogs  # type: ignore[import-not-found]
         coloredlogs.install(fmt="%(asctime)s,%(msecs)03d " + fmt, **kwargs)
     except ModuleNotFoundError:
         logging.basicConfig(format="%(asctime)s " + fmt, **kwargs)
