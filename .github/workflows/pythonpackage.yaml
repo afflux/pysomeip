@@ -18,17 +18,29 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
+
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v4
       with:
         python-version: ${{ matrix.python-version }}
+
     - name: Install tox
       run: |
         python -m pip install --upgrade pip
         pip install tox
+
+    - name: Setup network interfaces
+      run: |
+        sudo ip link add type veth
+        sudo ip link set dev veth0 address 02:00:00:00:00:00
+        sudo ip link set dev veth1 address 02:00:00:00:00:01
+        sudo ip link set up dev veth0
+        sudo ip link set up dev veth1
+
     - name: Run tests, flake8 and mypy
       run: |
         tox
+
     - name: "Upload coverage to Codecov"
       uses: "codecov/codecov-action@v3"
       with:
