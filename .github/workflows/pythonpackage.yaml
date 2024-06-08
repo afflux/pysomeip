@@ -30,12 +30,27 @@ jobs:
         pip install tox
 
     - name: Setup network interfaces
+      if: ${{ startsWith(matrix.os, 'ubuntu') }}
       run: |
+        set -x
         sudo ip link add type veth
-        sudo ip link set dev veth0 address 02:00:00:00:00:00
-        sudo ip link set dev veth1 address 02:00:00:00:00:01
-        sudo ip link set up dev veth0
-        sudo ip link set up dev veth1
+        sudo ip link set dev veth0 address 02:00:00:00:00:00 name feth0
+        sudo ip link set dev veth1 address 02:00:00:00:00:01 name feth1
+        sudo ip link set up dev feth0
+        sudo ip link set up dev feth1
+
+    - name: Setup network interfaces
+      if: ${{ startsWith(matrix.os, 'macos') }}
+      run: |
+        set -x
+        # it looks like macos will only assign the link-local address
+        # when another address was assigned?? let's just directly assign our
+        # fixed LL addresses here directly
+        sudo ifconfig feth0 create inet6 fe80::ff:fe00:0
+        sudo ifconfig feth1 create inet6 fe80::ff:fe00:1
+        sudo ifconfig feth0 peer feth1
+        sudo ifconfig feth0 up
+        sudo ifconfig feth1 up
 
     - name: Run tests, flake8 and mypy
       run: |

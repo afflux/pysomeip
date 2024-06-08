@@ -2377,19 +2377,19 @@ class TestMulticastEndpointsV6(
     required setup on Linux:
 
         ip link add type veth
-        ip link set dev veth0 address 02:00:00:00:00:00
-        ip link set dev veth1 address 02:00:00:00:00:01
-        ip link set up dev veth0
-        ip link set up dev veth1
+        ip link set dev veth0 address 02:00:00:00:00:00 name feth0
+        ip link set dev veth1 address 02:00:00:00:00:01 name feth1
+        ip link set up dev feth0
+        ip link set up dev feth1
     """
 
-    bind_lo_addr = "fe80::ff:fe00:0%veth0"
-    sender_lo_addr = "fe80::ff:fe00:1%veth0"
-    send_addr = "fe80::ff:fe00:0%veth1"
-    bind_mc_addr = "ff02::dead:beef%veth0"
-    send_mc_addr = "ff02::dead:beef%veth1"
-    bind_interface = "veth0"
-    send_interface = "veth1"
+    bind_lo_addr = "fe80::ff:fe00:0%feth0"
+    sender_lo_addr = "fe80::ff:fe00:1%feth0"
+    send_addr = "fe80::ff:fe00:0%feth1"
+    bind_mc_addr = "ff02::dead:beef%feth0"
+    send_mc_addr = "ff02::dead:beef%feth1"
+    bind_interface = "feth0"
+    send_interface = "feth1"
     AF = socket.AF_INET6
 
     def setUp(self):
@@ -2397,7 +2397,7 @@ class TestMulticastEndpointsV6(
             socket.if_nametoindex(self.bind_interface)
             socket.if_nametoindex(self.send_interface)
         except OSError as exc:
-            raise unittest.SkipTest("test interfaces veth0 / veth1 not up") from exc
+            raise unittest.SkipTest("test interfaces feth0 / feth1 not up") from exc
 
     def _mc_sockopts(self, sock: socket.socket) -> None:
         ifindex = socket.if_nametoindex(self.send_interface)
