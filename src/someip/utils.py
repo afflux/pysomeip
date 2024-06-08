@@ -25,7 +25,7 @@ def log_exceptions(msg="unhandled exception in {__func__}"):
                     return await f(self, *args, **kwargs)
                 except Exception:
                     self.log.exception(
-                        msg.format(__func__=f.__qualname__, *args, **kwargs)
+                        msg.format(*args, __func__=f.__qualname__, **kwargs)
                     )
 
         else:
@@ -36,7 +36,7 @@ def log_exceptions(msg="unhandled exception in {__func__}"):
                     return f(self, *args, **kwargs)
                 except Exception:
                     self.log.exception(
-                        msg.format(__func__=f.__qualname__, *args, **kwargs)
+                        msg.format(*args, __func__=f.__qualname__, **kwargs)
                     )
 
         return wrapper
