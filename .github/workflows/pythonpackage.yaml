@@ -38,6 +38,8 @@ jobs:
           sudo ip link set dev veth1 address 02:00:00:00:00:01 name feth1
           sudo ip link set up dev feth0
           sudo ip link set up dev feth1
+          sudo ip addr show dev feth0
+          sudo ip addr show dev feth1
 
       - name: Setup network interfaces
         if: ${{ startsWith(matrix.os, 'macos') }}
@@ -53,9 +55,12 @@ jobs:
           sudo ifconfig feth1 inet6 fd00::1
           sudo ifconfig feth0 up
           sudo ifconfig feth1 up
+          sudo ifconfig feth0
+          sudo ifconfig feth1
 
       - name: Run tests, flake8 and mypy
         run: |
+          false
           tox
 
       - name: "Upload coverage to Codecov"
