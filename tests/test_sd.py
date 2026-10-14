@@ -839,6 +839,29 @@ class TestSDDiscoveryTTL1(_BaseSDDiscoveryTest):
         self.assertEqual(self.mock.method_calls, [])
         self.assertEqual(self.mock_single.method_calls, [])
 
+    async def test_sd_reboot_offer_in_same_message(self):
+        # ServiceDiscoveryProtocol schedules reboot handling and the offers of the
+        # same SD message in one event loop pass. The offer must win.
+        loop = asyncio.get_running_loop()
+        loop.call_soon(self.prot.reboot_detected, self.fake_addr)
+        loop.call_soon(self.prot.handle_offer, self.offer_5566, self.fake_addr)
+        await settle()
+
+        self.assertEqual(
+            self.mock_single.method_calls,
+            [
+                unittest.mock.call.service_stopped(self.cfg_offer_5566, self.fake_addr),
+                unittest.mock.call.service_offered(self.cfg_offer_5566, self.fake_addr),
+            ],
+        )
+
+        # later offers only refresh the entry; listeners keep the service
+        self.mock_single.reset_mock()
+        self.prot.handle_offer(self.offer_5566, self.fake_addr)
+        await settle()
+
+        self.assertEqual(self.mock_single.method_calls, [])
+
     async def test_sd(self):
         self.prot.handle_offer(self.offer_5566, self.fake_addr)
         self.prot.handle_offer(self.offer_5567, self.fake_addr)

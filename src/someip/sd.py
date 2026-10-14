@@ -800,16 +800,19 @@ class TimedStore(typing.Generic[KT]):
         callback(entry, address)
 
     def stop_all_for_address(self, address: _T_SOCKADDR) -> None:
-        for entry, (callback, handle) in self.store[address].items():
+        # Notify immediately, like stop(). A deferred notification would run after an
+        # Offer in the same reboot-flagged SD message re-adds the entry, so listeners
+        # would see the service as stopped while the store still holds it, and later
+        # Offers would only refresh it without notifying again.
+        stopped = self.store.pop(address, {})
+        for entry, (callback, handle) in stopped.items():
             if handle:
                 handle.cancel()
-            asyncio.get_event_loop().call_soon(callback, entry, address)
-        self.store[address].clear()
+            callback(entry, address)
 
     def stop_all(self) -> None:
-        for addr in self.store.keys():
+        for addr in list(self.store):
             self.stop_all_for_address(addr)
-        self.store.clear()
 
     def stop_all_matching(self, match: typing.Callable[[KT], bool]) -> None:
         stopping_entries = [
